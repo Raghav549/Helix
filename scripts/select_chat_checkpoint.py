@@ -32,8 +32,19 @@ def _metrics(report: dict[str, Any]) -> dict[str, Any]:
             "validation_loss": loss, "tasks": task_names}
 
 
-def choose_checkpoint(base_report: dict[str, Any], sft_report: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def choose_checkpoint(base_report: dict[str, Any], sft_report: dict[str, Any],
+                     sft_training: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
     base, sft = _metrics(base_report), _metrics(sft_report)
+    sft_training = sft_training or {}
+    initial_sft_loss = sft_training.get("initial_heldout_loss")
+    best_sft_loss = sft_training.get("best_sft_val_loss")
+    improvement = 0.0
+    try:
+        if float(initial_sft_loss) > 0 and float(best_sft_loss) >= 0:
+            improvement = (float(initial_sft_loss) - float(best_sft_loss)) / float(initial_sft_loss)
+    except (TypeError, ValueError):
+        improvement = 0.0
+    lm_regression = sft["validation_loss"] - base["validation_loss"]
     if base["tasks"] != sft["tasks"]:
         raise ValueError("base and SFT evaluations must use the same ordered task set")
     if sft["passed"] > base["passed"]:
@@ -45,11 +56,17 @@ def choose_checkpoint(base_report: dict[str, Any], sft_report: dict[str, Any]) -
     elif sft["validation_loss"] < base["validation_loss"]:
         selected = "sft"
         reason = "task scores tie and SFT has lower held-out language-model loss"
+    elif improvement >= 0.20 and lm_regression <= 1.5:
+        selected = "sft"
+        reason = "task scores tie; SFT held-out instruction loss improves by at least 20% and language-model loss regression stays within the documented tolerance"
     else:
         selected = "base"
-        reason = "task scores tie and base preserves equal or better held-out language-model loss"
-    return selected, {"rule_version": 1, "selected_stage": selected, "reason": reason,
+        reason = "task scores tie and SFT does not meet the instruction-loss improvement guardrail"
+    return selected, {"rule_version": 2, "selected_stage": selected, "reason": reason,
                       "base": base, "sft": sft,
+                      "sft_instruction_loss_improvement_fraction": round(improvement, 4),
+                      "sft_language_model_loss_regression": round(lm_regression, 4),
+                      "sft_training_metrics": sft_training,
                       "note": "Small diagnostic suite only; selection is not proof of broad intelligence or generalization."}
 
 
@@ -59,13 +76,15 @@ def main() -> int:
     parser.add_argument("--base-eval", required=True)
     parser.add_argument("--sft-checkpoint", required=True)
     parser.add_argument("--sft-eval", required=True)
+    parser.add_argument("--sft-metrics", required=True)
     parser.add_argument("--output-checkpoint", required=True)
     parser.add_argument("--output-eval", required=True)
     parser.add_argument("--manifest", required=True)
     args = parser.parse_args()
     base_report = json.loads(Path(args.base_eval).read_text(encoding="utf-8"))
     sft_report = json.loads(Path(args.sft_eval).read_text(encoding="utf-8"))
-    selected, manifest = choose_checkpoint(base_report, sft_report)
+    sft_training = json.loads(Path(args.sft_metrics).read_text(encoding="utf-8"))
+    selected, manifest = choose_checkpoint(base_report, sft_report, sft_training)
     checkpoint = Path(args.base_checkpoint if selected == "base" else args.sft_checkpoint)
     evaluation = Path(args.base_eval if selected == "base" else args.sft_eval)
     for required in (checkpoint, evaluation):
