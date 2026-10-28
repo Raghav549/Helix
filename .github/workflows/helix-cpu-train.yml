@@ -1,0 +1,146 @@
+name: HELIX CPU training and release bundle
+
+on:
+  push:
+    branches:
+      - codex/helix-training-deploy
+  workflow_dispatch:
+    inputs:
+      train_steps:
+        description: "Fresh random-init pretraining steps (default 1800)"
+        required: false
+        default: "1800"
+      sft_steps:
+        description: "Instruction-tuning steps (default 600)"
+        required: false
+        default: "600"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: helix-cpu-training-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  train-chat:
+    name: Test, train, evaluate, package
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install CPU PyTorch and project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+          python -m pip install -e . pytest
+
+      - name: Run repository tests
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: python -m pytest -q
+
+      - name: Prepare the rights-documented starter corpus
+        run: |
+          mkdir -p out/reproduce
+          python scripts/prepare_corpus.py --manifest out/reproduce/manifest.json --output out/reproduce/corpus.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path("configs/helix-research.json").read_text(encoding="utf-8"))
+          cfg["train"]["max_iters"] = int("${{ inputs.train_steps || '1800' }}")
+          cfg["train"]["out_dir"] = "out/reproduce/llm"
+          for key, value in {
+              "corpus_file": "out/reproduce/corpus.txt",
+              "train_file": "out/reproduce/data/train.npy",
+              "val_file": "out/reproduce/data/val.npy",
+              "vocab_file": "out/reproduce/data/vocab.json",
+              "merges_file": "out/reproduce/data/merges.json",
+          }.items():
+              cfg["data"][key] = value
+          Path("out/reproduce/llm-config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+          PY
+
+      - name: Train HELIX from random initialization
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python -m helix train --config out/reproduce/llm-config.json
+
+      - name: Instruction-tune the HELIX checkpoint
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: |
+          python -m helix sft \
+            --config out/reproduce/llm-config.json \
+            --base-checkpoint out/reproduce/llm/ckpt-best.pt \
+            --sft-pairs data/sft_pairs.json \
+            --out-dir out/reproduce/sft \
+            --max-iters "${{ inputs.sft_steps || '600' }}" \
+            --block-size 128 --batch-size 6 --lr 0.0002
+
+      - name: Evaluate the trained instruction checkpoint
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: |
+          python -m helix eval \
+            --config out/reproduce/llm-config.json \
+            --checkpoint out/reproduce/sft/sckpt-best.pt \
+            --eval-iters 30 --seed 1337 \
+            --out-path out/reproduce/sft-eval.json
+
+      - name: Package model, tokenizer and evaluation metadata
+        run: |
+          python scripts/package_model_bundle.py \
+            --checkpoint out/reproduce/sft/sckpt-best.pt \
+            --vocab out/reproduce/data/vocab.json \
+            --merges out/reproduce/data/merges.json \
+            --config configs/helix-research.json \
+            --evaluation out/reproduce/sft-eval.json \
+            --output out/reproduce/helix-chat-bundle.zip
+          sha256sum out/reproduce/helix-chat-bundle.zip > out/reproduce/helix-chat-bundle.zip.sha256
+          cp out/reproduce/sft-eval.json out/reproduce/evaluation-report.json
+
+      - name: Preserve reproducible training outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: helix-cpu-training-run-${{ github.run_number }}
+          path: |
+            out/reproduce/manifest.json
+            out/reproduce/llm-config.json
+            out/reproduce/sft-eval.json
+            out/reproduce/helix-chat-bundle.zip
+            out/reproduce/helix-chat-bundle.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish versioned experimental checkpoint release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: helix-model-run-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: HELIX experimental chat model run ${{ github.run_number }}
+          body: |
+            Reproducible CPU training run from random initialization. This is a small experimental checkpoint, not a frontier or general-purpose assistant.
+
+            Review the attached evaluation report and training manifest before using it. The run is trained on the repository's documented starter corpus only; it does not represent comprehensive Internet Archive or Wikipedia training.
+          files: |
+            out/reproduce/helix-chat-bundle.zip
+            out/reproduce/helix-chat-bundle.zip.sha256
+            out/reproduce/evaluation-report.json
+          fail_on_unmatched_files: true
+          make_latest: false
