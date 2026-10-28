@@ -145,7 +145,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
     auth_username = os.getenv('HELIX_AUTH_USERNAME', '')
     auth_password = os.getenv('HELIX_AUTH_PASSWORD', '')
     if require_auth and (not auth_username or not auth_password):
-        raise RuntimeError('HELIX_REQUIRE_AUTH is enabled but HELIX_AUTH_USERNAME/HELIX_AUTH_PASSWORD are missing')
+        raise RuntimeError('HELIX_REQUIRE_AUTH is enabled but credentials are missing: set HELIX_AUTH_USERNAME and HELIX_AUTH_PASSWORD')
     app.config['MAX_CONTENT_LENGTH'] = 6 * 1024 * 1024
     config_path = _path(config_path)
     llm_checkpoint = _path(llm_checkpoint)
@@ -208,8 +208,8 @@ def create_app(config_path: str = 'configs/helix-research.json',
         if request.path == '/healthz' or not require_auth:
             return None
         auth = request.authorization
-        username_ok = bool(auth and hmac.compare_digest(auth.username or '', auth_username))
-        password_ok = bool(auth and hmac.compare_digest(auth.password or '', auth_password))
+        username_ok = bool(auth and hmac.compare_digest((auth.username or '').encode('utf-8'), auth_username.encode('utf-8')))
+        password_ok = bool(auth and hmac.compare_digest((auth.password or '').encode('utf-8'), auth_password.encode('utf-8')))
         if username_ok and password_ok:
             return None
         response = Response('Authentication required', status=401, mimetype='text/plain')
