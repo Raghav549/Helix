@@ -34,6 +34,12 @@ jobs:
     name: Test, train, evaluate, package
     runs-on: ubuntu-latest
     timeout-minutes: 100
+    env:
+      HELIX_DATA_ROOT: /tmp/helix-training-data
+      HELIX_THREADS: "2"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -51,87 +57,81 @@ jobs:
           python -m pip install -e . pytest
 
       - name: Run repository tests
-        env:
-          OMP_NUM_THREADS: "1"
-          OPENBLAS_NUM_THREADS: "1"
         run: python -m pytest -q
 
-      - name: Prepare the rights-documented starter corpus
+      - name: Prepare the rights-documented starter corpus outside the repository
         run: |
-          mkdir -p out/reproduce
-          python scripts/prepare_corpus.py --manifest out/reproduce/manifest.json --output out/reproduce/corpus.txt
+          ROOT="$HELIX_DATA_ROOT/out/reproduce"
+          mkdir -p "$ROOT"
+          python scripts/prepare_corpus.py --manifest "$ROOT/manifest.json" --output "$ROOT/corpus.txt"
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
+          root = Path(os.environ["HELIX_DATA_ROOT"]) / "out/reproduce"
           cfg = json.loads(Path("configs/helix-research.json").read_text(encoding="utf-8"))
           cfg["train"]["max_iters"] = int("${{ inputs.train_steps || '1800' }}")
-          cfg["train"]["out_dir"] = "out/reproduce/llm"
+          cfg["train"]["out_dir"] = str(root / "llm")
           for key, value in {
-              "corpus_file": "out/reproduce/corpus.txt",
-              "train_file": "out/reproduce/data/train.npy",
-              "val_file": "out/reproduce/data/val.npy",
-              "vocab_file": "out/reproduce/data/vocab.json",
-              "merges_file": "out/reproduce/data/merges.json",
+              "corpus_file": root / "corpus.txt",
+              "train_file": root / "data/train.npy",
+              "val_file": root / "data/val.npy",
+              "vocab_file": root / "data/vocab.json",
+              "merges_file": root / "data/merges.json",
           }.items():
-              cfg["data"][key] = value
-          Path("out/reproduce/llm-config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+              cfg["data"][key] = str(value)
+          config_path = root / "llm-config.json"
+          config_path.parent.mkdir(parents=True, exist_ok=True)
+          config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+          print("training config:", config_path)
           PY
 
       - name: Train HELIX from random initialization
-        env:
-          OMP_NUM_THREADS: "1"
-          OPENBLAS_NUM_THREADS: "1"
-          MKL_NUM_THREADS: "1"
-        run: python -m helix train --config out/reproduce/llm-config.json
+        run: python -m helix train --config "$HELIX_DATA_ROOT/out/reproduce/llm-config.json"
 
       - name: Instruction-tune the HELIX checkpoint
-        env:
-          OMP_NUM_THREADS: "1"
-          OPENBLAS_NUM_THREADS: "1"
-          MKL_NUM_THREADS: "1"
         run: |
+          ROOT="$HELIX_DATA_ROOT/out/reproduce"
           python -m helix sft \
-            --config out/reproduce/llm-config.json \
-            --base-checkpoint out/reproduce/llm/ckpt-best.pt \
+            --config "$ROOT/llm-config.json" \
+            --base-checkpoint "$ROOT/llm/ckpt-best.pt" \
             --sft-pairs data/sft_pairs.json \
-            --out-dir out/reproduce/sft \
+            --out-dir "$ROOT/sft" \
             --max-iters "${{ inputs.sft_steps || '600' }}" \
             --block-size 128 --batch-size 6 --lr 0.0002
 
       - name: Evaluate the trained instruction checkpoint
-        env:
-          OMP_NUM_THREADS: "1"
-          OPENBLAS_NUM_THREADS: "1"
-          MKL_NUM_THREADS: "1"
         run: |
+          ROOT="$HELIX_DATA_ROOT/out/reproduce"
           python -m helix eval \
-            --config out/reproduce/llm-config.json \
-            --checkpoint out/reproduce/sft/sckpt-best.pt \
+            --config "$ROOT/llm-config.json" \
+            --checkpoint "$ROOT/sft/sckpt-best.pt" \
             --eval-iters 30 --seed 1337 \
-            --out-path out/reproduce/sft-eval.json
+            --out-path "$ROOT/sft-eval.json"
 
       - name: Package model, tokenizer and evaluation metadata
         run: |
+          ROOT="$HELIX_DATA_ROOT/out/reproduce"
           python scripts/package_model_bundle.py \
-            --checkpoint out/reproduce/sft/sckpt-best.pt \
-            --vocab out/reproduce/data/vocab.json \
-            --merges out/reproduce/data/merges.json \
+            --checkpoint "$ROOT/sft/sckpt-best.pt" \
+            --vocab "$ROOT/data/vocab.json" \
+            --merges "$ROOT/data/merges.json" \
             --config configs/helix-research.json \
-            --evaluation out/reproduce/sft-eval.json \
-            --output out/reproduce/helix-chat-bundle.zip
-          sha256sum out/reproduce/helix-chat-bundle.zip > out/reproduce/helix-chat-bundle.zip.sha256
-          cp out/reproduce/sft-eval.json out/reproduce/evaluation-report.json
+            --evaluation "$ROOT/sft-eval.json" \
+            --output "$ROOT/helix-chat-bundle.zip"
+          sha256sum "$ROOT/helix-chat-bundle.zip" > "$ROOT/helix-chat-bundle.zip.sha256"
+          cp "$ROOT/sft-eval.json" "$ROOT/evaluation-report.json"
 
       - name: Preserve reproducible training outputs
         uses: actions/upload-artifact@v4
         with:
           name: helix-cpu-training-run-${{ github.run_number }}
           path: |
-            out/reproduce/manifest.json
-            out/reproduce/llm-config.json
-            out/reproduce/sft-eval.json
-            out/reproduce/helix-chat-bundle.zip
-            out/reproduce/helix-chat-bundle.zip.sha256
+            /tmp/helix-training-data/out/reproduce/manifest.json
+            /tmp/helix-training-data/out/reproduce/llm-config.json
+            /tmp/helix-training-data/out/reproduce/sft-eval.json
+            /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip
+            /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -146,8 +146,8 @@ jobs:
 
             Review the attached evaluation report and training manifest before using it. The run is trained on the repository's documented starter corpus only; it does not represent comprehensive Internet Archive or Wikipedia training.
           files: |
-            out/reproduce/helix-chat-bundle.zip
-            out/reproduce/helix-chat-bundle.zip.sha256
-            out/reproduce/evaluation-report.json
+            /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip
+            /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip.sha256
+            /tmp/helix-training-data/out/reproduce/evaluation-report.json
           fail_on_unmatched_files: true
           make_latest: false
