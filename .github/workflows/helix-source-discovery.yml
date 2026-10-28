@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      HELIX_DATA_ROOT: ${{ runner.temp }}/helix-discovery-data
+      HELIX_DATA_ROOT: /tmp/helix-discovery-data
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
