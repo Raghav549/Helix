@@ -28,12 +28,18 @@ class ModelConfig:
     rope_base: float = 10000.0       # RoPE base frequency
     weight_tying: bool = True        # tie input embedding and output projection
     grad_checkpoint: bool = False    # activation checkpointing (train only)
+    block_type: str = "transformer"  # transformer | linear_attn | recurrent |
+                                     # "transformer,linear_attn" for hybrid (cycled)
 
     def __post_init__(self) -> None:
         if self.n_embd % self.n_head != 0:
             raise ValueError("n_embd must be divisible by n_head")
         if self.n_head % self.n_kv_head != 0:
             raise ValueError("n_head must be divisible by n_kv_head")
+        allowed = {"transformer", "linear_attn", "recurrent"}
+        types = {t.strip() for t in self.block_type.split(",")}
+        if not types or not types <= allowed:
+            raise ValueError(f"block_type must use {allowed}, got {self.block_type!r}")
 
 
 @dataclass

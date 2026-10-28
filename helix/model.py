@@ -24,6 +24,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from helix.kvcache import KVCache
+from helix.arch_blocks import build_block
 
 from helix.config import ModelConfig
 
@@ -236,7 +237,10 @@ class HelixTransformer(nn.Module):
         self.head_dim = config.n_embd // config.n_head
         self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
         self.drop = nn.Dropout(config.dropout)
-        self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
+        block_types = [t.strip() for t in config.block_type.split(",")]
+        self.blocks = nn.ModuleList(
+            [build_block(config, block_types[i % len(block_types)]) for i in range(config.n_layer)]
+        )
         self.norm_f = RMSNorm(config.n_embd, config.eps)
         if config.weight_tying:
             self.lm_head: Optional[nn.Linear] = None

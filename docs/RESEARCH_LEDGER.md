@@ -60,6 +60,19 @@ limitations, and decision.
 | Limitations | KV cache benefit scales with prompt length and model size; on this tiny model full recompute is competitive. int8 here dequantizes to float32 for matmul (no int8 BLAS), so it's memory-reduction not compute-speedup; true int8 speed needs oneDNN/int8 matmul. |
 | Decision | Do NOT adopt KV cache or int8 as defaults on this hardware (no measured speedup). Expose them as optional flags (`--kv-cache --quantize`) for larger/longer-context runs where they are expected to win. Re-bench when scaling. Next: architecture ablations. |
 
+## v0.5 — Architecture ablations: transformer vs linear attention vs recurrent
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | The best block type (transformer vs O(T) linear attention vs O(1)-state recurrent) depends on hardware and scale; it must be chosen by measuring val loss per token and per second at equal compute, not assumed. |
+| Reference | Linear attention: Katharopoulos et al. 2020 "Transformers are RNNs"; recurrent/GRU: Cho et al. 2014. Implemented independently; baseline reuses helix.model.Block exactly. |
+| Techniques | ModelConfig.block_type (transformer | linear_attn | recurrent | hybrid comma-list cycled); helix/arch_blocks.py (LinearAttention, LinearAttnBlock, RecurrentBlock, build_block); HelixTransformer builds mixed block stacks; helix/ablate.py trains N variants from random init on identical data + identical compute budget; reports val loss, tokens/sec, quality/sec. |
+| Status | Implemented (helix/arch_blocks.py, helix/model.py block_type, helix/ablate.py, helix/cli.py `helix ablate`); tests/test_model.py block-type tests; tests/test_ablate.py. |
+| Hardware | 2 vCPU, 3.85 GB RAM, AVX512F/AVX2, CPU only. |
+| Results | out/ablation-report.json (174K-199K params, block 64, 60 iters, seed corpus): transformer val_loss=6.6639 tok/s=23956; linear_attn val_loss=6.7133 tok/s=17151; recurrent val_loss=6.7776 tok/s=6745. Transformer wins on BOTH quality and speed at this scale. |
+| Limitations | Tiny model/corpus; val set only 58 tokens so absolute loss is not meaningful, but the equal-compute relative comparison is valid for this stage. Recurrent block uses a Python loop over T (slow); a vectorized/parallel scan might close the speed gap on longer contexts. |
+| Decision | Adopt transformer as the default block type. Do NOT adopt linear attention or recurrent as defaults here — both lose on quality AND speed at this scale. Re-bench ablations when scaling to larger models/longer contexts where O(T^2) attention may dominate. Next: scaled training run + instruction tuning pipeline. |
+
 ## Adoption policy
 
 Every technique is a hypothesis to benchmark. Adopt only when measured

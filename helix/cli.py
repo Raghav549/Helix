@@ -183,6 +183,14 @@ def cmd_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ablate(args: argparse.Namespace) -> int:
+    from helix.ablate import run_ablation
+
+    run_ablation(args.config, args.out_path,
+                 block_types=[t.strip() for t in args.block_types.split(",") if t.strip()])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="helix", description="HELIX CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -238,6 +246,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_bench.add_argument("--block-sizes", default="64,128,256",
                          help="comma-separated context lengths to benchmark")
     p_bench.set_defaults(func=cmd_bench)
+
+    p_ablate = sub.add_parser("ablate", help="architecture ablation: compare block types from random init")
+    p_ablate.add_argument("--config", default="configs/helix-tiny.json")
+    p_ablate.add_argument("--out-path", default="out/ablation-report.json")
+    p_ablate.add_argument("--block-types", default="transformer,linear_attn,recurrent",
+                          help="comma-separated block types to compare")
+    p_ablate.set_defaults(func=cmd_ablate)
 
     return parser
 
