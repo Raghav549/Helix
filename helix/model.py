@@ -23,6 +23,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
+from helix.kvcache import KVCache
+
 from helix.config import ModelConfig
 
 
@@ -121,6 +123,63 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(self.c_proj(y))
         return y
 
+    def forward_incremental(
+        self,
+        x: torch.Tensor,
+        cache: KVCache,
+        start_pos: int,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        layer_idx: int,
+    ) -> torch.Tensor:
+        """Process new tokens x using the KV cache for previous positions.
+
+        x: (B, T_new, C) new tokens at positions [start_pos, start_pos+T_new).
+        cache: per-layer KV cache holding rotated K/V for positions [0, start_pos).
+        cos/sin: RoPE for the *new* positions only, shape (1, 1, T_new, head_dim).
+        Returns y of shape (B, T_new, C) and updates the cache in place.
+        """
+        B, T_new, C = x.size()
+
+        q = self.c_q(x).view(B, T_new, self.n_head, self.head_dim).transpose(1, 2)   # (B, nh, T_new, hs)
+        k = self.c_k(x).view(B, T_new, self.n_kv_head, self.head_dim).transpose(1, 2)  # (B, nkv, T_new, hs)
+        v = self.c_v(x).view(B, T_new, self.n_kv_head, self.head_dim).transpose(1, 2)
+
+        # Rotate the new queries/keys by their absolute positions. Cached K/V were
+        # already rotated when they were inserted, so no re-rotation needed there.
+        q = apply_rope(q, cos, sin)
+        k = apply_rope(k, cos, sin)
+
+        # Store rotated K/V in the cache.
+        cache.update(layer_idx, k, v)
+        k_full, v_full = cache.get(layer_idx)  # (B, nkv, S, hs)
+        S = k_full.size(2)
+
+        # Expand shared K/V heads to match query heads (grouped-query attention).
+        if self.n_kv_head != self.n_head:
+            rep = self.n_head // self.n_kv_head
+            k_full = k_full.unsqueeze(2).expand(
+                B, self.n_kv_head, rep, S, self.head_dim
+            ).reshape(B, self.n_head, S, self.head_dim)
+            v_full = v_full.unsqueeze(2).expand(
+                B, self.n_kv_head, rep, S, self.head_dim
+            ).reshape(B, self.n_head, S, self.head_dim)
+
+        att = (q @ k_full.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
+
+        # Causal mask: query at position start_pos+i may attend to keys 0..start_pos+i.
+        q_pos = torch.arange(start_pos, start_pos + T_new, device=x.device).view(T_new, 1)
+        k_pos = torch.arange(0, S, device=x.device).view(1, S)
+        mask = (k_pos <= q_pos).view(1, 1, T_new, S)
+        att = att.masked_fill(mask == 0, float("-inf"))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+
+        y = att @ v_full  # (B, nh, T_new, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T_new, C)
+        y = self.resid_dropout(self.c_proj(y))
+        return y
+
 
 class SwiGLU(nn.Module):
     """SwiGLU feed-forward network (Shazeer, 2020)."""
@@ -149,6 +208,21 @@ class Block(nn.Module):
 
     def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.norm1(x), cos, sin)
+        x = x + self.ffn(self.norm2(x))
+        return x
+
+    def forward_incremental(
+        self,
+        x: torch.Tensor,
+        cache: KVCache,
+        start_pos: int,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        layer_idx: int,
+    ) -> torch.Tensor:
+        x = x + self.attn.forward_incremental(
+            self.norm1(x), cache, start_pos, cos, sin, layer_idx
+        )
         x = x + self.ffn(self.norm2(x))
         return x
 
@@ -182,6 +256,50 @@ class HelixTransformer(nn.Module):
         rope = RotaryEmbedding(self.head_dim, self.config.rope_base)
         rope.inv_freq = rope.inv_freq.to(device)
         return rope(T, device)
+
+    def _rope_positions(
+        self, start: int, end: int, device: torch.device
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """RoPE cos/sin for absolute positions [start, end)."""
+        rope = RotaryEmbedding(self.head_dim, self.config.rope_base)
+        rope.inv_freq = rope.inv_freq.to(device)
+        return rope(end - start, device)
+
+    def incremental_forward(
+        self,
+        idx: torch.Tensor,
+        cache: KVCache,
+        start_pos: int,
+    ) -> Tuple[torch.Tensor, KVCache]:
+        """Incremental forward: process tokens at [start_pos, start_pos+T).
+
+        Uses the KV cache for all earlier positions. Returns logits for the
+        input tokens and the updated cache.
+        """
+        device = idx.device
+        B, T = idx.size()
+        if T > self.config.block_size:
+            idx = idx[:, -self.config.block_size:]
+            T = self.config.block_size
+            start_pos = max(0, start_pos - (idx.size(1) - T))
+
+        x = self.drop(self.tok_emb(idx))
+        cos, sin = self._rope_positions(start_pos, start_pos + T, device)
+
+        if self.config.grad_checkpoint and self.training:
+            # Not used during generation (eval mode), but kept for completeness.
+            for i, block in enumerate(self.blocks):
+                x = block.forward_incremental(x, cache, start_pos, cos, sin, i)
+        else:
+            for i, block in enumerate(self.blocks):
+                x = block.forward_incremental(x, cache, start_pos, cos, sin, i)
+
+        x = self.norm_f(x)
+        if self.config.weight_tying:
+            logits = F.linear(x, self.tok_emb.weight)
+        else:
+            logits = self.lm_head(x)  # type: ignore[union-attr]
+        return logits, cache
 
     def forward(
         self,

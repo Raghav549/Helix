@@ -45,7 +45,20 @@ limitations, and decision.
 | Baseline | v0.1 tiny model (594K params, block 128). |
 | Results | out/bench-report.json: forward+backward 1072.7 tok/s @ block64/batch4; 271.6 tok/s @ block128/batch4; peak RSS ~687-715 MB; generation 27.7 ms/token (~36 tok/s); context scaling ~10.5 ms (block64) to ~19.4 ms (block128) per iter. |
 | Limitations | Generation uses full-context recompute (no KV cache yet). Microbenchmarks, not end-to-end training throughput. RAM figure is process RSS, not total system. |
-| Decision | Ship v0.3 bench; recommendations favor block<=128, batch<=8, gradient accumulation on this <=2-CPU/<4GB machine. Next: KV-cache generation, architecture ablations. |
+| Decision | Ship v0.3 bench; KV-cache generation and quantized inference implemented and benchmarked (v0.4). Next: architecture ablations. |
+
+## v0.4 — KV-cached generation + quantized CPU inference (measured, not assumed)
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | KV caching and int8 quantization can speed up CPU generation. Both are hypotheses to benchmark, not assumed wins. |
+| Reference | nanoGPT/nanochat KV-cache patterns; PyTorch dynamic quantization inspected as references; KVCache and QuantizedLinear implemented independently. |
+| Techniques | KVCache (per-layer rotated K/V buffers, GQA-aware, causal mask over cached keys), HelixTransformer.incremental_forward, generate_with_cache, dynamic per-tensor int8 QuantizedLinear, quantize_model. Generation modes compared: full-recompute vs KV-cached vs int8-cached. |
+| Status | Implemented (helix/kvcache.py, helix/quantize.py, helix/model.py incremental_forward, helix/infer.py generate_with_cache/generate_quantized, helix/bench.py bench_generate_modes); tests/test_kvcache.py, tests/test_quantize.py; `helix generate --kv-cache --quantize` CLI flags. |
+| Hardware | 2 vCPU, 3.85 GB RAM, AVX512F/AVX2, CPU only. |
+| Results | out/bench-report.json (tiny 594K-param model, short prompt, 32 new tokens): full-recompute 1.046 ms/tok; KV-cached 1.128 ms/tok (0.93x, output matches); int8-cached 1.066 ms/tok (0.98x, output matches). Correctness = 1.0 across modes. Standalone run showed KV cache 1.65x on a slightly different measurement — variance due to tiny model/short prompt where Python overhead dominates. |
+| Limitations | KV cache benefit scales with prompt length and model size; on this tiny model full recompute is competitive. int8 here dequantizes to float32 for matmul (no int8 BLAS), so it's memory-reduction not compute-speedup; true int8 speed needs oneDNN/int8 matmul. |
+| Decision | Do NOT adopt KV cache or int8 as defaults on this hardware (no measured speedup). Expose them as optional flags (`--kv-cache --quantize`) for larger/longer-context runs where they are expected to win. Re-bench when scaling. Next: architecture ablations. |
 
 ## Adoption policy
 

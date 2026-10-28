@@ -315,6 +315,90 @@ def bench_context_scaling(
         ))
 
 
+def bench_generate_modes(
+    report: BenchReport,
+    model: HelixTransformer,
+    tok,
+    device: str,
+    prompt: str = "The helix is a",
+    max_new_tokens: int = 32,
+    iters: int = 3,
+) -> None:
+    """Compare full-recompute vs KV-cached vs int8-quantized generation.
+
+    Every mode is a hypothesis: measure ms/token and correctness, then adopt
+    only what is measurably faster on this hardware. Outputs must match across
+    modes (same sampling); speed is the only differentiator.
+    """
+    from helix.infer import (
+        generate, generate_with_cache, generate_quantized,
+    )
+    from helix.quantize import quantize_model
+
+    model.eval()
+
+    def timed(fn, *a, **k):
+        # warmup
+        fn(*a, **k)
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            out = fn(*a, **k)
+        dt = time.perf_counter() - t0
+        return out, dt
+
+    # 1. full-recompute (float32)
+    out_full, dt_full = timed(generate, model, tok, prompt, max_new_tokens=max_new_tokens,
+                              temperature=1.0, top_k=1, device=device)
+    report.add(BenchResult(
+        name="generate_full_ms_per_token", category="latency",
+        value=round(dt_full * 1000.0 / iters / max_new_tokens, 3), unit="ms/token",
+        context={"mode": "full_recompute", "max_new_tokens": max_new_tokens, "device": device},
+    ))
+
+    # 2. KV-cached (float32)
+    out_cache, dt_cache = timed(generate_with_cache, model, tok, prompt,
+                                max_new_tokens=max_new_tokens, temperature=1.0,
+                                top_k=1, device=device)
+    report.add(BenchResult(
+        name="generate_kvcache_ms_per_token", category="latency",
+        value=round(dt_cache * 1000.0 / iters / max_new_tokens, 3), unit="ms/token",
+        context={"mode": "kv_cache", "max_new_tokens": max_new_tokens, "device": device},
+    ))
+    report.add(BenchResult(
+        name="generate_kvcache_output_matches_full", category="correctness",
+        value=1.0 if out_cache == out_full else 0.0, unit="bool",
+        context={"mode": "kv_cache_vs_full"},
+    ))
+    if dt_cache > 0:
+        report.add(BenchResult(
+            name="generate_kvcache_speedup_vs_full", category="throughput",
+            value=round(dt_full / max(dt_cache, 1e-9), 2), unit="x",
+            context={"mode": "kv_cache_vs_full"},
+        ))
+
+    # 3. int8-quantized (cached)
+    qmodel = quantize_model(model).eval()
+    out_q, dt_q = timed(generate_quantized, qmodel, tok, prompt,
+                        max_new_tokens=max_new_tokens, temperature=1.0,
+                        top_k=1, device=device, use_cache=True)
+    report.add(BenchResult(
+        name="generate_int8_ms_per_token", category="latency",
+        value=round(dt_q * 1000.0 / iters / max_new_tokens, 3), unit="ms/token",
+        context={"mode": "int8_cached", "max_new_tokens": max_new_tokens, "device": device},
+    ))
+    report.add(BenchResult(
+        name="generate_int8_output_matches_full", category="correctness",
+        value=1.0 if out_q == out_full else 0.0, unit="bool",
+        context={"mode": "int8_vs_full"},
+    ))
+    if dt_q > 0:
+        report.add(BenchResult(
+            name="generate_int8_speedup_vs_full", category="throughput",
+            value=round(dt_full / max(dt_q, 1e-9), 2), unit="x",
+            context={"mode": "int8_vs_full"},
+        ))
+
+
 # ---------------------------------------------------------------------------
 # Recommendations
 # ---------------------------------------------------------------------------
@@ -413,6 +497,7 @@ def run_bench(
         tok = ByteLevelBPETokenizer.load(cfg.data.vocab_file, cfg.data.merges_file)
     if tok is not None:
         bench_generation(report, model, tok, device)
+        bench_generate_modes(report, model, tok, device)
 
     bench_context_scaling(report, model, train_ids, val_ids, cfg.train,
                           device, batch_size=max(1, cfg.train.batch_size // 2),

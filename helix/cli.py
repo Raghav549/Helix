@@ -22,19 +22,49 @@ def cmd_train(args: argparse.Namespace) -> int:
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
-    from helix.infer import load_model_and_tokenizer, generate
+    if args.quantize:
+        from helix.infer import load_quantized_model_and_tokenizer, generate_quantized
 
-    model, tok, cfg = load_model_and_tokenizer(args.config, args.checkpoint)
-    out = generate(
-        model,
-        tok,
-        args.prompt,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        top_k=args.top_k,
-        top_p=args.top_p,
-        device=cfg.train.device,
-    )
+        model, tok, cfg = load_quantized_model_and_tokenizer(args.config, args.checkpoint)
+        out = generate_quantized(
+            model,
+            tok,
+            args.prompt,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            device=cfg.train.device,
+            use_cache=args.kv_cache,
+        )
+    elif args.kv_cache:
+        from helix.infer import load_model_and_tokenizer, generate_with_cache
+
+        model, tok, cfg = load_model_and_tokenizer(args.config, args.checkpoint)
+        out = generate_with_cache(
+            model,
+            tok,
+            args.prompt,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            device=cfg.train.device,
+        )
+    else:
+        from helix.infer import load_model_and_tokenizer, generate
+
+        model, tok, cfg = load_model_and_tokenizer(args.config, args.checkpoint)
+        out = generate(
+            model,
+            tok,
+            args.prompt,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            device=cfg.train.device,
+        )
     print(out)
     return 0
 
@@ -169,6 +199,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_gen.add_argument("--temperature", type=float, default=0.8)
     p_gen.add_argument("--top-k", type=int, default=None)
     p_gen.add_argument("--top-p", type=float, default=None)
+    p_gen.add_argument(
+        "--kv-cache",
+        action="store_true",
+        help="use KV-cached incremental generation (benchmark vs full recompute)",
+    )
+    p_gen.add_argument(
+        "--quantize",
+        action="store_true",
+        help="quantize Linear weights to int8 before generation (benchmark vs float32)",
+    )
     p_gen.set_defaults(func=cmd_generate)
 
     p_chat = sub.add_parser("chat", help="interactive chat")
