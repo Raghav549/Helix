@@ -22,9 +22,13 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from helix.memory import MemoryStore
+from helix.storage import REPOSITORY_ROOT, resolve_data_root
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Tests and embedded hosts may point the static shell at their own directory,
+# while checkpoints and outputs always remain separate under HELIX_DATA_ROOT.
 PROJECT_ROOT = os.path.dirname(APP_ROOT)
+RESOLVED_PROJECT_ROOT = os.path.abspath(PROJECT_ROOT)
 
 
 def _path(value: str) -> str:
@@ -137,12 +141,19 @@ def create_app(config_path: str = 'configs/helix-research.json',
         raise ValueError('vision_config is not used by the synthetic classifier; use caption_dir for the captioner')
     app = Flask(__name__, static_folder='static', static_url_path='/static')
     app.config['MAX_CONTENT_LENGTH'] = 6 * 1024 * 1024
-    config_path, llm_checkpoint = _path(config_path), _path(llm_checkpoint)
+    config_path = _path(config_path)
+    llm_checkpoint = _path(llm_checkpoint)
+    # Never derive checked-in or heavy artifact paths from a monkeypatched
+    # app root; configure absolute paths explicitly for custom deployments.
+    if not os.path.isabs(config_path):
+        config_path = os.path.join(REPOSITORY_ROOT, config_path)
+    if not os.path.isabs(llm_checkpoint):
+        llm_checkpoint = os.path.join(RESOLVED_PROJECT_ROOT, llm_checkpoint)
     image_config = _path(image_gen_config or 'artifacts/image-gen/config.json')
     image_checkpoint = _path(image_gen_checkpoint or 'artifacts/image-gen/ckpt-final.pt')
     vision_checkpoint = _path(vision_checkpoint or 'artifacts/vision/ckpt-final.pt')
     caption_dir = _path(caption_dir or 'artifacts/caption')
-    runtime_root = Path(PROJECT_ROOT) / 'out'
+    runtime_root = resolve_data_root() / 'out'
     image_root = runtime_root / 'web_images'
     image_root.mkdir(parents=True, exist_ok=True)
     store = MemoryStore(str(runtime_root / 'memory.sqlite3'))
@@ -552,7 +563,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
     @app.get('/api/research/experiments')
     def research_experiments():
         entries = []
-        for root in (Path(PROJECT_ROOT) / 'artifacts', runtime_root, runtime_root / 'experiments'):
+        for root in (resolve_data_root() / 'artifacts', runtime_root, runtime_root / 'experiments'):
             if not root.is_dir(): continue
             for directory in sorted(root.iterdir()):
                 if not directory.is_dir() or directory.is_symlink(): continue

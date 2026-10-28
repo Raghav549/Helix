@@ -122,3 +122,32 @@ Both default to `http://127.0.0.1:8766/` and accept `HELIX_URL`. The optional
 `HELIX_BROWSER_NO_SANDBOX=1` flag disables the **browser's** sandbox, and
 should only be used in an isolated test environment, never for untrusted sites;
 it does not change HELIX's separate fail-closed code sandbox.
+
+## External storage and initial corpus
+
+Set `HELIX_DATA_ROOT` to a directory outside the repository before running
+training or the web server. Relative `artifacts/...` paths in loaded
+configurations resolve below that root. Direct `DataConfig(...)` constructors
+used by tests and custom scripts retain the path they receive; only
+`load_config()` applies the external-root rule.
+
+Run the verified release migration with:
+
+```sh
+HELIX_DATA_ROOT=/media/helix/data python scripts/migrate_artifacts.py
+HELIX_DATA_ROOT=/media/helix/data python scripts/migrate_artifacts.py --check
+```
+
+The initial source pipeline reads the MIT-licensed HELIX seed corpus from the
+repository, copies it to external `raw/` storage without a network request,
+filters benchmark names, deduplicates and writes deterministic splits:
+
+```sh
+HELIX_DATA_ROOT=/media/helix/data python -m helix sources
+```
+
+This does not download third-party material. The catalog currently has one
+deterministic six-topic seed, so a rerun writes the same `corpus/train.txt`,
+`val.txt` and `test.txt` names and their SHA-256 files. Preserve a prior run
+by copying the whole `corpus/` directory before rerunning; the external-root
+layout intentionally keeps these generated files out of Git.

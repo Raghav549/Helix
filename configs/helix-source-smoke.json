@@ -1,0 +1,48 @@
+{
+  "data": {
+    "corpus_file": "corpus/train.txt",
+    "merges_file": "artifacts/source-smoke/data/merges.json",
+    "train_file": "artifacts/source-smoke/data/train.npy",
+    "train_frac": 0.9,
+    "val_file": "artifacts/source-smoke/data/val.npy",
+    "vocab_file": "artifacts/source-smoke/data/vocab.json"
+  },
+  "model": {
+    "bias": false,
+    "block_size": 64,
+    "block_type": "transformer",
+    "dropout": 0.0,
+    "eps": 1e-05,
+    "grad_checkpoint": false,
+    "n_embd": 64,
+    "n_head": 4,
+    "n_kv_head": 2,
+    "n_layer": 2,
+    "rope_base": 10000.0,
+    "vocab_size": 512,
+    "weight_tying": true
+  },
+  "train": {
+    "batch_size": 2,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "block_size": 64,
+    "device": "cpu",
+    "dtype": "float32",
+    "eval_interval": 10,
+    "eval_iters": 5,
+    "grad_clip": 1.0,
+    "gradient_accumulation_steps": 1,
+    "learning_rate": 0.001,
+    "log_interval": 10,
+    "lr_decay_iters": 30,
+    "max_iters": 30,
+    "min_lr": 0.0001,
+    "out_dir": "artifacts/source-smoke/llm",
+    "resume_from": "artifacts/source-smoke/llm/ckpt-final.pt",
+    "save_interval": 15,
+    "seed": 1337,
+    "warmup_iters": 2,
+    "weight_decay": 0.1
+  }
+}

@@ -9,6 +9,9 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field, asdict
+from pathlib import Path
+
+from helix.storage import REPOSITORY_ROOT, resolve_data_root
 from typing import Optional
 
 
@@ -94,6 +97,12 @@ class HelixConfig:
 
 
 def load_config(path: str) -> HelixConfig:
+    """Load configuration and project-relative external storage paths.
+
+    The checked-in JSON path stays in Git; heavy checkpoints, tokenized
+    corpora and experiment outputs intentionally resolve under
+    ``HELIX_DATA_ROOT``. An explicit absolute path is never moved.
+    """
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
     cfg = HelixConfig()
@@ -103,6 +112,30 @@ def load_config(path: str) -> HelixConfig:
         cfg.train = TrainConfig(**raw["train"])
     if "data" in raw:
         cfg.data = DataConfig(**raw["data"])
+
+    def storage_to_external(value: str) -> str:
+        candidate = Path(os.path.expanduser(value))
+        if candidate.is_absolute():
+            return candidate.as_posix()
+        external = resolve_data_root() / candidate
+        if external.exists():
+            return str(external)
+        # Small authored corpora remain checked in; generated corpora and all
+        # other artifacts live outside the repository. An existing repository
+        # path is therefore selected only for corpus text, never for data.
+        local = REPOSITORY_ROOT / candidate
+        if candidate.name == 'seed_corpus.txt' and local.is_file():
+            return str(local)
+        return str(external)
+
+    cfg.data.train_file = storage_to_external(cfg.data.train_file)
+    cfg.data.val_file = storage_to_external(cfg.data.val_file)
+    cfg.data.vocab_file = storage_to_external(cfg.data.vocab_file)
+    cfg.data.merges_file = storage_to_external(cfg.data.merges_file)
+    cfg.data.corpus_file = storage_to_external(cfg.data.corpus_file)
+    cfg.train.out_dir = storage_to_external(cfg.train.out_dir)
+    if cfg.train.resume_from:
+        cfg.train.resume_from = storage_to_external(cfg.train.resume_from)
     return cfg
 
 

@@ -15,7 +15,7 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 
-from helix.config import HelixConfig, load_config
+from helix.config import HelixConfig, load_config, save_config
 from helix.data import build_from_corpus, get_batch, load_ids
 from helix.model import HelixTransformer
 
@@ -100,6 +100,7 @@ def load_checkpoint(
 
 def train(config_path: str) -> None:
     cfg = load_config(config_path)
+    save_config(cfg, config_path)
     torch.manual_seed(cfg.train.seed)
     np.random.seed(cfg.train.seed)
     device = cfg.train.device
