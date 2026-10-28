@@ -76,14 +76,14 @@ def test_repo_inspector(tmp_path):
 
 def test_coding_agent_execute():
     agent = CodingAgent(root=tempfile.gettempdir())
-    res = agent.execute_code("result = 21 * 2\\n", approved=True)
+    res = agent.execute_code("result = 21 * 2\n", approved=True)
     if not res.ok and res.error and "isolation unavailable" in res.error:
         pytest.skip("host does not permit the fail-closed Linux sandbox")
     assert res.ok is True and "42" in res.output
 
 
 def test_demo_code_fix():
-    out = demo_code_fix("result = 10 / 2\\n", approved=True)
+    out = demo_code_fix("result = 10 / 2\n", approved=True)
     if out.get("execution", {}).get("error") and "isolation unavailable" in out["execution"]["error"]:
         pytest.skip("host does not permit the fail-closed Linux sandbox")
     assert "analysis" in out and "execution" in out
