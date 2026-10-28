@@ -201,6 +201,7 @@ def train_sft(config_path: str, base_checkpoint: str, sft_pairs_file: str,
     pairs_path = temporary_dir / Path(sft_pairs_file).name
     if not Path(sft_pairs_file).is_absolute():
         pairs_path = temporary_dir / sft_pairs_file
+    pairs_path.parent.mkdir(parents=True, exist_ok=True)
     pairs_path.write_text(Path(sft_pairs_file).read_text(encoding='utf-8'), encoding='utf-8')
     sft_pairs_file = str(pairs_path)
     torch.manual_seed(seed)
