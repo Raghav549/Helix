@@ -33,6 +33,20 @@ limitations, and decision.
 | Limitations | Eval tasks are heuristics, not validated benchmarks. Corpus scan is local-only; network ingestion (Internet Archive, Wikipedia, Gutenberg) recorded as candidate sources but not fetched by default. No semantic dedup, no OCR, no malware scanning yet. |
 | Decision | Ship v0.2 eval+corpus; next: benchmark harness (throughput/latency/RAM), then architecture ablations and scaling. |
 
+## v0.3 — CPU benchmark harness (hardware detection + throughput/latency/RAM/scaling)
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | A CPU-first benchmark harness can measure forward/backward throughput, generation latency, peak RAM, and context-length scaling, with automatic hardware detection and conservative recommendations, using only numpy+torch. |
+| Reference | Inspired by nanoGPT benchmarking patterns and MLPerf-style throughput/latency metrics; implementation written independently. No external benchmarking framework adopted. |
+| Techniques | perf_counter wall-clock timing, /proc/self/status VmHWM for peak RSS, /proc/cpuinfo SIMD detection (AVX2/AVX-512/NEON), /proc/meminfo RAM, torch thread auto-detection, forward+backward and generation benchmarks across context lengths. |
+| Status | Implemented (helix/bench.py, tests/test_bench.py); wired into `helix bench` CLI. |
+| Hardware | 2 vCPU, 3.85 GB RAM, CPU only; AVX512F/AVX2/AVX/SSE4_2 detected. |
+| Baseline | v0.1 tiny model (594K params, block 128). |
+| Results | out/bench-report.json: forward+backward 1072.7 tok/s @ block64/batch4; 271.6 tok/s @ block128/batch4; peak RSS ~687-715 MB; generation 27.7 ms/token (~36 tok/s); context scaling ~10.5 ms (block64) to ~19.4 ms (block128) per iter. |
+| Limitations | Generation uses full-context recompute (no KV cache yet). Microbenchmarks, not end-to-end training throughput. RAM figure is process RSS, not total system. |
+| Decision | Ship v0.3 bench; recommendations favor block<=128, batch<=8, gradient accumulation on this <=2-CPU/<4GB machine. Next: KV-cache generation, architecture ablations. |
+
 ## Adoption policy
 
 Every technique is a hypothesis to benchmark. Adopt only when measured

@@ -145,6 +145,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bench(args: argparse.Namespace) -> int:
+    from helix.bench import run_bench
+
+    run_bench(args.config, args.out_path,
+              block_sizes=[int(s) for s in args.block_sizes.split(",") if s.strip()])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="helix", description="HELIX CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -183,6 +191,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--checkpoint", required=True)
     p_serve.add_argument("--port", type=int, default=8765)
     p_serve.set_defaults(func=cmd_serve)
+
+    p_bench = sub.add_parser("bench", help="CPU benchmark: throughput, latency, RAM, scaling")
+    p_bench.add_argument("--config", default="configs/helix-tiny.json")
+    p_bench.add_argument("--out-path", default="out/bench-report.json")
+    p_bench.add_argument("--block-sizes", default="64,128,256",
+                         help="comma-separated context lengths to benchmark")
+    p_bench.set_defaults(func=cmd_bench)
 
     return parser
 
