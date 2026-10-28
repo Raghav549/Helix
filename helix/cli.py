@@ -246,7 +246,7 @@ def cmd_web(args: argparse.Namespace) -> int:
     if args.vision_config: argv += ["--vision-config", args.vision_config]
     if args.vision_checkpoint: argv += ["--vision-checkpoint", args.vision_checkpoint]
     argv += ["--host", args.host, "--port", str(args.port)]
-    _sys.argv = ["helix", "web"] + argv
+    _sys.argv = ["helix"] + argv  # drop consumed "web" token
     return web_main()
 
 
