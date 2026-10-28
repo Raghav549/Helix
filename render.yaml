@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: helix-chat
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: >-
+      pip install --upgrade pip &&
+      pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 &&
+      pip install -e . gunicorn==23.0.0 &&
+      python scripts/fetch_model_bundle.py
+    startCommand: >-
+      gunicorn --workers 1 --threads 2 --timeout 120
+      --bind 0.0.0.0:$PORT helix.wsgi:app
+    healthCheckPath: /healthz
+    autoDeploy: no
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: HELIX_REQUIRE_AUTH
+        value: "1"
+      - key: HELIX_AUTH_USERNAME
+        sync: false
+      - key: HELIX_AUTH_PASSWORD
+        sync: false
+      - key: HELIX_MODEL_BUNDLE_URL
+        sync: false
+      - key: HELIX_MODEL_BUNDLE_SHA256
+        sync: false
+      - key: HELIX_DATA_ROOT
+        value: /tmp/helix-data
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
