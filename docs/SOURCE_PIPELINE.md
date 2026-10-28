@@ -21,8 +21,14 @@ its SHA-256, then verifies the copied file again. Originals are retained.
 
 `helix/discovery.py` defines connector metadata for Internet Archive advanced
 search, Open Library, Wikimedia dumps, Common Crawl, OpenAlex, Hugging Face
-datasets and GitHub topic searches. Connectors catalog access metadata only;
-availability is never treated as training permission.
+datasets and GitHub topic searches. Run `python scripts/discover_sources.py --source all`
+to query broad default topics across Internet Archive, Open Library, OpenAlex,
+GitHub repository search and the Wikimedia dump index. Repeat `--query` for
+additional topics and use `--limit` to bound each metadata response. Results are
+written to `HELIX_DATA_ROOT/discovery/candidates.json` by default. This command
+retrieves metadata only; it never downloads full text, never treats an open
+catalog field as proof of training permission, and leaves every candidate in
+`needs_review` until a human verifies item-level rights and permitted uses.
 
 `helix/sources.py` stores each source as a machine-readable record with URL,
 kind, license, license evidence, permitted uses, language, format, retrieval
