@@ -11,7 +11,13 @@ on:
       - 'configs/helix-research.json'
       - 'scripts/prepare_corpus.py'
       - 'scripts/package_model_bundle.py'
-      - 'tests/**'
+      - 'tests/test_train.py'
+      - 'tests/test_sft.py'
+      - 'tests/test_data.py'
+      - 'tests/test_tokenizer.py'
+      - 'tests/test_model.py'
+      - 'tests/test_infer.py'
+      - 'tests/test_config.py'
   workflow_dispatch:
     inputs:
       train_steps:
