@@ -1,0 +1,12 @@
+[
+  ["Answer: Hello, how are you today?", "I am doing well, thank you for asking."],
+  ["Answer: Can you explain recursion in simple terms?", "Recursion is when a function calls itself to solve a smaller version of the same problem."],
+  ["What is photosynthesis?", "Photosynthesis is the process by which green plants convert sunlight into chemical energy."],
+  ["What does chlorophyll do?", "Chlorophyll captures photons and drives the electron transport chain in the thylakoid membrane."],
+  ["What is the Pythagorean theorem?", "In a right triangle, a squared plus b squared equals c squared."],
+  ["What is a prime number?", "A prime number is a natural number greater than one that has no positive divisors other than one and itself."],
+  ["Write a factorial function in Python.", "def factorial(n):\\n    if n <= 1:\\n        return 1\\n    return n * factorial(n - 1)"],
+  ["Write a fibonacci function in Python.", "def fibonacci(n):\\n    a, b = 0, 1\\n    for _ in range(n):\\n        a, b = b, a + b\\n    return a"],
+  ["What is gravity according to general relativity?", "Gravity is the curvature of spacetime caused by mass and energy."],
+  ["I think, therefore I am.", "This is Descartes' statement that the act of thinking proves one's own existence."]
+]

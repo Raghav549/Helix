@@ -191,6 +191,23 @@ def cmd_ablate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sft(args: argparse.Namespace) -> int:
+    from helix.sft import train_sft
+
+    train_sft(
+        config_path=args.config,
+        base_checkpoint=args.base_checkpoint,
+        sft_pairs_file=args.sft_pairs,
+        out_dir=args.out_dir,
+        max_iters=args.max_iters,
+        block_size=args.block_size,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        device="cpu",
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="helix", description="HELIX CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -253,6 +270,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_ablate.add_argument("--block-types", default="transformer,linear_attn,recurrent",
                           help="comma-separated block types to compare")
     p_ablate.set_defaults(func=cmd_ablate)
+
+    p_sft = sub.add_parser("sft", help="supervised instruction tuning (separate stage from pretraining)")
+    p_sft.add_argument("--config", required=True)
+    p_sft.add_argument("--base-checkpoint", required=True)
+    p_sft.add_argument("--sft-pairs", required=True, help="JSON list of [instruction, response] pairs")
+    p_sft.add_argument("--out-dir", default="out/sft-run")
+    p_sft.add_argument("--max-iters", type=int, default=100)
+    p_sft.add_argument("--block-size", type=int, default=128)
+    p_sft.add_argument("--batch-size", type=int, default=4)
+    p_sft.add_argument("--lr", type=float, default=1e-4)
+    p_sft.set_defaults(func=cmd_sft)
 
     return parser
 

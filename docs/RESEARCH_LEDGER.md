@@ -71,7 +71,20 @@ limitations, and decision.
 | Hardware | 2 vCPU, 3.85 GB RAM, AVX512F/AVX2, CPU only. |
 | Results | out/ablation-report.json (174K-199K params, block 64, 60 iters, seed corpus): transformer val_loss=6.6639 tok/s=23956; linear_attn val_loss=6.7133 tok/s=17151; recurrent val_loss=6.7776 tok/s=6745. Transformer wins on BOTH quality and speed at this scale. |
 | Limitations | Tiny model/corpus; val set only 58 tokens so absolute loss is not meaningful, but the equal-compute relative comparison is valid for this stage. Recurrent block uses a Python loop over T (slow); a vectorized/parallel scan might close the speed gap on longer contexts. |
-| Decision | Adopt transformer as the default block type. Do NOT adopt linear attention or recurrent as defaults here — both lose on quality AND speed at this scale. Re-bench ablations when scaling to larger models/longer contexts where O(T^2) attention may dominate. Next: scaled training run + instruction tuning pipeline. |
+| Decision | Adopt transformer as the default block type. Do NOT adopt linear attention or recurrent as defaults here — both lose on quality AND speed at this scale. Re-bench ablations when scaling to larger models/longer contexts where O(T^2) attention may dominate. Next: instruction tuning pipeline. |
+
+## v0.6 — Supervised instruction tuning (SFT), strictly separate from pretraining
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | Instruction following is a separable stage: load a base checkpoint trained from random init, continue training on (instruction, response) pairs supervising ONLY response tokens, with its own checkpoint/optimizer/versioning. |
+| Reference | Supervised fine-tuning pattern (instruction → response) common in instruction-tuned models; implemented independently with response-loss masking. No pretrained weights used — base checkpoint is HELIX's own random-init model. |
+| Techniques | helix/sft.py: build_instruction_pairs (dialogue/Q&A/declarative extraction), tokenize_pairs (instruction-loss masking), train_sft (separate training loop, response-only masked cross-entropy), generate_response (response-only decoding), `helix sft` CLI. Separate out_dir, sft-log.jsonl, sckpt-best/final.pt, sft-metrics.json. |
+| Status | Implemented (helix/sft.py, helix/cli.py `helix sft`); tests/test_sft.py; data/sft_pairs.json (10 instruction pairs). |
+| Hardware | 2 vCPU, 3.85 GB RAM, CPU only. |
+| Results | out/sft-run/: SFT on real baseline (out/tiny-run/ckpt-best.pt, 174K params) over 60 iters: sft_val_loss 2.56 → 1.43 → 1.18. Pipeline functions and loss decreases. Outputs remain low-quality because base model is tiny/tiny-corpus — a capacity/data limitation, honestly documented, not a capability claim. |
+| Limitations | Tiny model cannot actually know facts; SFT teaches format/response-prediction on this toy data. 10 pairs is a demonstration, not a real instruction dataset. The general ingestion pipeline (helix/corpus.py) will supply larger instruction sources in later stages. |
+| Decision | Ship SFT as a separate, versioned stage. Next: a scaled pretraining run + larger instruction dataset + preference alignment exploration only where eval justifies. |
 
 ## Adoption policy
 
