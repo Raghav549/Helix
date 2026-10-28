@@ -29,3 +29,11 @@ def test_negative_generation_counts_are_rejected():
     import pytest
     with pytest.raises(ValueError):
         generate_pairs([], math_count=-1)
+
+
+def test_requested_code_logic_and_conversation_counts_produce_distinct_pairs():
+    _, manifest = generate_pairs([], seed=23, math_count=0, code_count=60, logic_count=80, conversation_count=40)
+    counts = manifest["actual_counts"]
+    assert counts["code"] >= 50
+    assert counts["logic"] >= 70
+    assert counts["conversation"] == 40
