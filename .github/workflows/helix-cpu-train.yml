@@ -135,6 +135,7 @@ jobs:
             --config configs/helix-research.json \
             --evaluation "$ROOT/sft-eval.json" \
             --sft-metrics "$ROOT/sft/sft-metrics.json" \
+            --sft-data-manifest "$ROOT/sft-pairs-manifest.json" \
             --output "$ROOT/helix-chat-bundle.zip"
           sha256sum "$ROOT/helix-chat-bundle.zip" > "$ROOT/helix-chat-bundle.zip.sha256"
           cp "$ROOT/sft-eval.json" "$ROOT/evaluation-report.json"
