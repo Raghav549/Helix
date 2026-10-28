@@ -138,6 +138,7 @@ jobs:
             --base-eval "$ROOT/base-eval.json" \
             --sft-checkpoint "$ROOT/sft/sckpt-best.pt" \
             --sft-eval "$ROOT/sft-eval.json" \
+            --sft-metrics "$ROOT/sft/sft-metrics.json" \
             --output-checkpoint "$ROOT/selected-checkpoint.pt" \
             --output-eval "$ROOT/selected-evaluation.json" \
             --manifest "$ROOT/checkpoint-selection.json"
