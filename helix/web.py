@@ -233,15 +233,23 @@ def create_app(config_path: str = 'configs/helix-research.json',
     def index():
         return send_from_directory(app.static_folder, 'index.html')
 
+    @app.get('/healthz')
+    def healthz():
+        # Liveness only: this endpoint intentionally does not load large models.
+        return jsonify({'ok': True, 'service': 'helix-chat'})
+
     @app.get('/api/status')
     def status():
-        return jsonify({'ok': True, 'device': 'cpu',
-                        'models': {'llm': os.path.isfile(config_path) and os.path.isfile(llm_checkpoint),
-                                   'image_gen': os.path.isfile(image_config) and os.path.isfile(image_checkpoint),
-                                   'vision': os.path.isfile(vision_checkpoint),
-                                   'caption': os.path.isfile(os.path.join(caption_dir, 'ckpt-best.pt'))},
+        llm_files_present = os.path.isfile(config_path) and os.path.isfile(llm_checkpoint)
+        image_files_present = os.path.isfile(image_config) and os.path.isfile(image_checkpoint)
+        return jsonify({'ok': True, 'service': 'helix-chat', 'device': 'cpu',
+                        'models': {'llm_files_present': llm_files_present,
+                                   'image_gen_files_present': image_files_present,
+                                   'vision_files_present': os.path.isfile(vision_checkpoint),
+                                   'caption_files_present': os.path.isfile(os.path.join(caption_dir, 'ckpt-best.pt'))},
                         'loaded': {'llm': models._llm is not None, 'image_gen': models._image is not None,
                                    'vision': models._vision is not None, 'caption': models._caption is not None},
+                        'training': 'not run at web-service startup',
                         'limitations': 'Small experimental models. No general-purpose accuracy or photorealism claim.'})
 
     def start_chat(body, streaming):

@@ -113,3 +113,24 @@ information through guessing.
 HELIX-authored code and weights are MIT-licensed; mixed-source training data
 retain their original notices and terms. See `LICENSE`,
 `artifacts/WEIGHTS_LICENSE.txt`, and [the source inventory](docs/PROVENANCE.md).
+
+
+## Render test deployment
+
+A Render Free CPU web-service test deployment was created from branch
+`fix/ci-render-readiness` at:
+https://helix-chat.onrender.com
+Dashboard: https://dashboard.render.com/web/srv-dbh43gvlk1mc73evf1ig
+
+This is an experimental preview, not a production-safe public assistant:
+- The service process is live, but the bundled model checkpoints are stored under
+  `artifacts/` and `.gitignore` excludes most generated artifact files. The chat
+  endpoint must be tested before considering this a working deployed chatbot.
+- The web app has no authentication; do not submit secrets, sensitive personal
+  information, or untrusted code.
+- Render Free services have ephemeral local storage and can sleep while idle.
+- Full-corpus training and long-running model training are not run by the web
+  service. Training needs a separate, resumable compute job.
+- The latest passing public end-to-end deployment check has not yet been
+  recorded. Service liveness is not proof that the HELIX checkpoint loads or
+  generates a reply.
