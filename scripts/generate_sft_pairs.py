@@ -167,7 +167,7 @@ def generate_pairs(base_pairs: Iterable[Iterable[str]], seed: int = 1337,
         add("conversation", variants[(i // len(conversations)) % len(variants)], response)
 
     manifest = {
-        "format": 1,
+        "format": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "generator": "scripts/generate_sft_pairs.py",
         "seed": seed,
