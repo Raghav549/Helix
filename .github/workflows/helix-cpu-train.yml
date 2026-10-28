@@ -12,9 +12,11 @@ on:
       - 'scripts/prepare_corpus.py'
       - 'scripts/package_model_bundle.py'
       - 'scripts/generate_sft_pairs.py'
+      - 'scripts/select_chat_checkpoint.py'
       - 'tests/test_train.py'
       - 'tests/test_sft.py'
       - 'tests/test_generate_sft_pairs.py'
+      - 'tests/test_checkpoint_selection.py'
       - 'tests/test_data.py'
       - 'tests/test_tokenizer.py'
       - 'tests/test_model.py'
@@ -118,29 +120,44 @@ jobs:
             --max-iters "${{ inputs.sft_steps || '600' }}" \
             --block-size 128 --batch-size 6 --lr 0.0002
 
-      - name: Evaluate the trained instruction checkpoint
+      - name: Evaluate base and instruction-tuned checkpoints
         run: |
           ROOT="$HELIX_DATA_ROOT/out/reproduce"
+          python -m helix eval \
+            --config "$ROOT/llm-config.json" \
+            --checkpoint "$ROOT/llm/ckpt-best.pt" \
+            --eval-iters 30 --seed 1337 \
+            --out-path "$ROOT/base-eval.json"
           python -m helix eval \
             --config "$ROOT/llm-config.json" \
             --checkpoint "$ROOT/sft/sckpt-best.pt" \
             --eval-iters 30 --seed 1337 \
             --out-path "$ROOT/sft-eval.json"
+          python scripts/select_chat_checkpoint.py \
+            --base-checkpoint "$ROOT/llm/ckpt-best.pt" \
+            --base-eval "$ROOT/base-eval.json" \
+            --sft-checkpoint "$ROOT/sft/sckpt-best.pt" \
+            --sft-eval "$ROOT/sft-eval.json" \
+            --sft-metrics "$ROOT/sft/sft-metrics.json" \
+            --output-checkpoint "$ROOT/selected-checkpoint.pt" \
+            --output-eval "$ROOT/selected-evaluation.json" \
+            --manifest "$ROOT/checkpoint-selection.json"
 
       - name: Package model, tokenizer and evaluation metadata
         run: |
           ROOT="$HELIX_DATA_ROOT/out/reproduce"
           python scripts/package_model_bundle.py \
-            --checkpoint "$ROOT/sft/sckpt-best.pt" \
+            --checkpoint "$ROOT/selected-checkpoint.pt" \
             --vocab "$ROOT/data/vocab.json" \
             --merges "$ROOT/data/merges.json" \
             --config configs/helix-research.json \
-            --evaluation "$ROOT/sft-eval.json" \
+            --evaluation "$ROOT/selected-evaluation.json" \
             --sft-metrics "$ROOT/sft/sft-metrics.json" \
             --sft-data-manifest "$ROOT/sft-pairs-manifest.json" \
+            --selection-manifest "$ROOT/checkpoint-selection.json" \
             --output "$ROOT/helix-chat-bundle.zip"
           sha256sum "$ROOT/helix-chat-bundle.zip" > "$ROOT/helix-chat-bundle.zip.sha256"
-          cp "$ROOT/sft-eval.json" "$ROOT/evaluation-report.json"
+          cp "$ROOT/selected-evaluation.json" "$ROOT/evaluation-report.json"
 
       - name: Preserve reproducible training outputs
         uses: actions/upload-artifact@v4
@@ -149,7 +166,10 @@ jobs:
           path: |
             /tmp/helix-training-data/out/reproduce/manifest.json
             /tmp/helix-training-data/out/reproduce/llm-config.json
+            /tmp/helix-training-data/out/reproduce/base-eval.json
             /tmp/helix-training-data/out/reproduce/sft-eval.json
+            /tmp/helix-training-data/out/reproduce/selected-evaluation.json
+            /tmp/helix-training-data/out/reproduce/checkpoint-selection.json
             /tmp/helix-training-data/out/reproduce/sft/sft-metrics.json
             /tmp/helix-training-data/out/reproduce/sft-pairs-manifest.json
             /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip
@@ -171,6 +191,9 @@ jobs:
             /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip
             /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip.sha256
             /tmp/helix-training-data/out/reproduce/evaluation-report.json
+            /tmp/helix-training-data/out/reproduce/base-eval.json
+            /tmp/helix-training-data/out/reproduce/sft-eval.json
+            /tmp/helix-training-data/out/reproduce/checkpoint-selection.json
             /tmp/helix-training-data/out/reproduce/sft/sft-metrics.json
             /tmp/helix-training-data/out/reproduce/sft-pairs-manifest.json
           fail_on_unmatched_files: true
