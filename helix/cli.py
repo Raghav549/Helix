@@ -216,6 +216,7 @@ def cmd_sft(args: argparse.Namespace) -> int:
         block_size=args.block_size,
         batch_size=args.batch_size,
         lr=args.lr,
+        patience=args.patience,
         device="cpu",
     )
     return 0
@@ -514,6 +515,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sft.add_argument("--block-size", type=int, default=128)
     p_sft.add_argument("--batch-size", type=int, default=4)
     p_sft.add_argument("--lr", type=float, default=1e-4)
+    p_sft.add_argument("--patience", type=int, default=4, help="SFT evaluation checks without improvement before early stopping")
     p_sft.set_defaults(func=cmd_sft)
 
     p_agent = sub.add_parser("agent", help="run a modular agent with sandboxed tools")
