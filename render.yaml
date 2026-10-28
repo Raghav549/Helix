@@ -1,0 +1,29 @@
+# Render Blueprint for the HELIX CPU chat prototype.
+# Training remains a separate local/research job; do not train during web-service boot.
+services:
+  - type: web
+    name: helix-chat
+    runtime: python
+    plan: free
+    region: singapore
+    branch: fix/ci-render-readiness
+    buildCommand: |
+      python -m pip install --upgrade pip
+      python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+      python -m pip install -r requirements.txt
+      python -m pip install --no-deps -e .
+    startCommand: gunicorn --workers 1 --threads 2 --timeout 120 --bind 0.0.0.0:$PORT 'helix.web:create_app()'
+    healthCheckPath: /api/status
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: HELIX_THREADS
+        value: "2"
+      - key: OMP_NUM_THREADS
+        value: "2"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
+      - key: MKL_NUM_THREADS
+        value: "1"
+      - key: HELIX_DATA_ROOT
+        value: /tmp/helix
