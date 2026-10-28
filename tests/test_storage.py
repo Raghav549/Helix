@@ -76,3 +76,32 @@ def test_layout_validation(tmp_path):
     validate_storage_layout(root)
     for name in ('caches', 'outputs', 'artifacts'):
         assert (root / name).is_dir()
+
+
+def test_direct_dataclass_does_not_resolve_external(tmp_path):
+    # Regression: direct constructors must not redirect checked-in files.
+    from helix.config import DataConfig, HelixConfig, ModelConfig, TrainConfig
+    cfg = HelixConfig(model=ModelConfig(vocab_size=512),
+                      train=TrainConfig(out_dir=str(tmp_path / 'outputs')),
+                      data=DataConfig(train_file='data/train.npy',
+                                      val_file='data/val.npy',
+                                      vocab_file='data/vocab.json',
+                                      merges_file='data/merges.json',
+                                      corpus_file='data/seed_corpus.txt'))
+    assert cfg.data.corpus_file.startswith(str(repository_root()))
+    assert cfg.train.out_dir.startswith(str(tmp_path))
+
+
+def test_cli_source_run_builds_external_corpus(tmp_path):
+    # This regression ensures an ordinary CLI source run does not write into
+    # the repository and that the initial authored seed is accepted.
+    root = tmp_path / 'external'
+    root.mkdir(parents=True, exist_ok=True)
+    Path(root / 'seed_corpus.txt').write_text(
+        'Python functions return values. Mathematics uses evidence. '
+        'History examines dates and consequences. ' * 8, encoding='utf-8')
+    from helix.cli import main
+    assert main(['sources', '--data-root', str(root)]) == 0
+    assert (root / 'corpus' / 'train.txt').is_file()
+    assert not (Path(repository_root()) / 'corpus').exists()
+    assert not (Path(repository_root()) / 'outputs').exists()
