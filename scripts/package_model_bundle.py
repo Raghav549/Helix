@@ -25,6 +25,7 @@ def main() -> int:
     parser.add_argument("--config", default="configs/helix-research.json")
     parser.add_argument("--evaluation", required=True)
     parser.add_argument("--sft-metrics", default=None, help="Optional SFT metrics JSON embedded in the bundle manifest")
+    parser.add_argument("--sft-data-manifest", default=None, help="Optional generated SFT data provenance manifest")
     parser.add_argument("--output", default="out/helix-chat-bundle.zip")
     args = parser.parse_args()
     inputs = {
@@ -45,6 +46,12 @@ def main() -> int:
         if not metrics_path.is_file():
             raise SystemExit(f"SFT metrics report missing: {metrics_path}")
         sft_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    sft_data_manifest = None
+    if args.sft_data_manifest:
+        data_manifest_path = Path(args.sft_data_manifest)
+        if not data_manifest_path.is_file():
+            raise SystemExit(f"SFT data manifest missing: {data_manifest_path}")
+        sft_data_manifest = json.loads(data_manifest_path.read_text(encoding="utf-8"))
     manifest = {
         "format": 1,
         "model": "HELIX random-initialized experimental language model",
@@ -53,6 +60,7 @@ def main() -> int:
                   for name, path in inputs.items()},
         "evaluation": json.loads(evaluation.read_text(encoding="utf-8")),
         "sft_training": sft_metrics,
+        "sft_data_manifest": sft_data_manifest,
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
