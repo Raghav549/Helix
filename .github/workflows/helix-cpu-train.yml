@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - codex/helix-training-deploy
+    paths:
+      - 'helix/**'
+      - 'data/**'
+      - 'configs/helix-research.json'
+      - 'scripts/prepare_corpus.py'
+      - 'scripts/package_model_bundle.py'
+      - 'tests/**'
   workflow_dispatch:
     inputs:
       train_steps:
