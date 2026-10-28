@@ -102,7 +102,7 @@ def generate_pairs(base_pairs: Iterable[Iterable[str]], seed: int = 1337,
     ]
     for i in range(code_count):
         prompt, response = code_tasks[i % len(code_tasks)]
-        add("code", code_prompts[i % len(code_prompts)](prompt, i), response)
+        add("code", code_prompts[(i // len(code_tasks)) % len(code_prompts)](prompt, i), response)
         if i % 3 == 0:
             n = rng.randint(2, 20)
             add("code", f"Given square(x) returns x*x, what does square({n}) return? Return only the integer.",
@@ -119,6 +119,26 @@ def generate_pairs(base_pairs: Iterable[Iterable[str]], seed: int = 1337,
         ("Does correlation alone prove that one variable causes another?", "No. Confounding, reverse causation, or chance can explain an association."),
         ("If all birds in a small aviary are blue and Robin is a bird in that aviary, what color is Robin?", "Robin is blue under the stated premises."),
         ("No circles are squares. Shape S is a circle. Can S be a square?", "No. The premises exclude circles from being squares."),
+        ("All reptiles are cold-blooded. A snake is a reptile. What follows?", "The snake is cold-blooded under the stated premises."),
+        ("All prime numbers are greater than 1. Seven is prime. Is seven greater than 1?", "Yes. Seven is prime, so it is greater than 1."),
+        ("If it rains, the ground becomes wet. It is raining. What follows?", "The ground becomes wet under the stated rule."),
+        ("If a device has no power, it will not turn on. The device has no power. What follows?", "The device will not turn on."),
+        ("If P or Q is true and P is false, what follows in classical logic?", "Q must be true."),
+        ("If P and Q are both true, what follows about P?", "P is true; this is conjunction elimination."),
+        ("If P implies Q and Q is true, must P be true?", "No. That would be affirming the consequent, which is invalid."),
+        ("If P implies Q and P is false, must Q be false?", "No. That would be denying the antecedent, which is invalid."),
+        ("All cats are mammals. Luna is a cat. Is Luna a mammal?", "Yes. Luna is a cat, and all cats are mammals."),
+        ("No triangles are circles. Shape T is a triangle. Can T be a circle?", "No. The premises rule out triangles being circles."),
+        ("All even integers are divisible by 2. Fourteen is even. Is fourteen divisible by 2?", "Yes. Fourteen is even, so it is divisible by 2."),
+        ("All A are B, and no B are C. Can an A be C?", "No. Every A is B, and no B is C."),
+        ("If P and Q imply R, and both P and Q are true, what follows?", "R follows from the premises."),
+        ("If A is greater than B and B is greater than C, can C be greater than A?", "No. Transitivity gives A greater than C."),
+        ("All elements of set S satisfy property P. x is in S. What follows?", "x satisfies property P."),
+        ("Some A are B. Does that prove all A are B?", "No. A claim about some members does not establish a claim about all members."),
+        ("All apples are fruit. Does that mean all fruit are apples?", "No. The implication does not reverse."),
+        ("No rectangles are circles. Shape C is a circle. Is C a rectangle?", "No. The premises exclude circles from being rectangles."),
+        ("If every A is B and x is not B, what follows about x?", "x cannot be A; this is the contrapositive."),
+        ("If a claim has not been tested, should it be described as proven?", "No. It should be described as unverified until supported by adequate evidence."),
     ]
     for i in range(logic_count):
         prompt, response = syllogisms[i % len(syllogisms)]
@@ -127,7 +147,7 @@ def generate_pairs(base_pairs: Iterable[Iterable[str]], seed: int = 1337,
             "Answer carefully using only the stated premises: " + prompt,
             "Reason step by step internally, then give a concise answer: " + prompt,
         )
-        add("logic", variants[i % len(variants)], response)
+        add("logic", variants[(i // len(syllogisms)) % len(variants)], response)
 
     conversations = [
         ("If evidence is insufficient, how should you answer?", "State what is uncertain, explain what evidence is missing, and suggest a way to verify it."),
@@ -144,7 +164,7 @@ def generate_pairs(base_pairs: Iterable[Iterable[str]], seed: int = 1337,
     for i in range(conversation_count):
         prompt, response = conversations[i % len(conversations)]
         variants = (prompt, "Answer briefly: " + prompt, "Give practical guidance: " + prompt, prompt + " Keep the response concise.")
-        add("conversation", variants[i % len(variants)], response)
+        add("conversation", variants[(i // len(conversations)) % len(variants)], response)
 
     manifest = {
         "format": 1,
