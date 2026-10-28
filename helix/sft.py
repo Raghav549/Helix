@@ -187,13 +187,14 @@ def F_cross_entropy(logits: torch.Tensor, targets: torch.Tensor,
 def train_sft(config_path: str, base_checkpoint: str, sft_pairs_file: str,
               out_dir: str, max_iters: int = 100, eval_interval: int = 25,
               batch_size: int = 4, block_size: int = 128, lr: float = 1e-4,
-              seed: int = 1337, device: str = "cpu") -> dict:
+              seed: int = 1337, device: str = "cpu", patience: int = 4,
+              min_delta: float = 1e-4) -> dict:
     """SFT on a deterministic train/holdout split, with response-only loss."""
     import hashlib
     from helix.runtime import configure_threads
     from helix.storage import resolve_data_root
-    if min(max_iters, eval_interval, batch_size) < 1:
-        raise ValueError("iterations, interval and batch size must be positive")
+    if min(max_iters, eval_interval, batch_size, patience) < 1 or min_delta < 0:
+        raise ValueError("iterations, interval, batch size and patience must be positive; min_delta cannot be negative")
     # All experiment artifacts, including temporary instruction data, live in
     # the configured external root; no temporary data is written to the repo.
     temporary_dir = resolve_data_root(os.environ.get('HELIX_DATA_ROOT')) / 'artifacts/sft-smoke'
@@ -236,7 +237,11 @@ def train_sft(config_path: str, base_checkpoint: str, sft_pairs_file: str,
     start = time.perf_counter()
     total_tokens = 0
     best = float("inf")
+    bad_evals = 0
+    actual_iters = 0
+    early_stopped = False
     for step in range(1, max_iters + 1):
+        actual_iters = step
         selected = [training[int(i)] for i in rng.randint(0, len(training), size=batch_size)]
         length = max(len(ids) - 1 for ids, _ in selected)
         x = torch.full((batch_size, length), pad_id, dtype=torch.long, device=device)
@@ -265,10 +270,17 @@ def train_sft(config_path: str, base_checkpoint: str, sft_pairs_file: str,
                 f.write(json.dumps(log_entry) + "\n")
             print(f"[sft] step {step}: train_loss {train_loss:.4f} " +
                   (f"held_out_loss {val_loss:.4f}" if val_loss is not None else "no held-out pair"))
-            if selection_loss < best:
+            if selection_loss < best - min_delta:
                 best = selection_loss
+                bad_evals = 0
                 torch.save({"model": model.state_dict(), "config": asdict(cfg), "stage": "sft"},
                            os.path.join(out_dir, "sckpt-best.pt"))
+            else:
+                bad_evals += 1
+                if validation and bad_evals >= patience and step < max_iters:
+                    early_stopped = True
+                    print(f"[sft] early stopping at step {step}: held-out loss did not improve for {patience} evaluations")
+                    break
     dt = time.perf_counter() - start
     torch.save({"model": model.state_dict(), "config": asdict(cfg), "stage": "sft"},
                os.path.join(out_dir, "sckpt-final.pt"))
@@ -279,7 +291,9 @@ def train_sft(config_path: str, base_checkpoint: str, sft_pairs_file: str,
                "initial_train_loss": initial_train_loss, "initial_heldout_loss": initial_val_loss,
                "final_train_loss": sft_eval_loss(model, training, device),
                "final_heldout_loss": sft_eval_loss(model, validation, device) if validation else None,
-               "max_iters": max_iters, "elapsed_s": round(dt, 3),
+               "max_iters": max_iters, "actual_iters": actual_iters,
+               "early_stopped": early_stopped, "patience": patience, "min_delta": min_delta,
+               "elapsed_s": round(dt, 3),
                "tokens_processed": total_tokens, "tokens_per_sec": round(total_tokens / max(dt, 1e-9), 2),
                "best_sft_val_loss": round(best, 6) if validation else None,
                "checkpoint_selection": "held-out loss" if validation else "training loss (no holdout)",
