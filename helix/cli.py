@@ -11,6 +11,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from helix.train import train as train_fn
@@ -208,6 +209,30 @@ def cmd_sft(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_agent(args: argparse.Namespace) -> int:
+    from helix.agent import Agent, ToolRegistry, PythonTool, CalculatorTool
+
+    from helix.infer import load_model_and_tokenizer
+
+    model, tok, cfg = load_model_and_tokenizer(args.config, args.checkpoint)
+    reg = ToolRegistry.default_registry()
+    agent = Agent(model, tok, registry=reg, device=cfg.train.device,
+                  max_steps=args.max_steps, max_time_s=args.max_time,
+                  require_approval=not args.no_approval)
+    run = agent.run(args.goal)
+    print(f"Agent goal: {run.goal}")
+    print(f"Stopped: {run.stopped_reason}  steps={len(run.steps)}  "
+          f"time={run.total_duration_s}s")
+    print(f"Final answer: {run.final_answer}")
+    print("\nAudit log:")
+    print(agent.audit_log_json())
+    os.makedirs(os.path.dirname(args.audit_log) or ".", exist_ok=True)
+    with open(args.audit_log, "w", encoding="utf-8") as f:
+        f.write(agent.audit_log_json())
+    print(f"\nAudit log written to {args.audit_log}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="helix", description="HELIX CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -281,6 +306,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_sft.add_argument("--batch-size", type=int, default=4)
     p_sft.add_argument("--lr", type=float, default=1e-4)
     p_sft.set_defaults(func=cmd_sft)
+
+    p_agent = sub.add_parser("agent", help="run a modular agent with sandboxed tools")
+    p_agent.add_argument("--config", required=True)
+    p_agent.add_argument("--checkpoint", required=True)
+    p_agent.add_argument("--goal", required=True, help="task goal for the agent")
+    p_agent.add_argument("--max-steps", type=int, default=6)
+    p_agent.add_argument("--max-time", type=float, default=60.0)
+    p_agent.add_argument("--no-approval", action="store_true",
+                         help="auto-approve consequential tools (demo only)")
+    p_agent.add_argument("--audit-log", default="out/agent-audit.json",
+                         help="path to write the audit log")
+    p_agent.set_defaults(func=cmd_agent)
 
     return parser
 

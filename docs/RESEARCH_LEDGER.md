@@ -84,7 +84,20 @@ limitations, and decision.
 | Hardware | 2 vCPU, 3.85 GB RAM, CPU only. |
 | Results | out/sft-run/: SFT on real baseline (out/tiny-run/ckpt-best.pt, 174K params) over 60 iters: sft_val_loss 2.56 → 1.43 → 1.18. Pipeline functions and loss decreases. Outputs remain low-quality because base model is tiny/tiny-corpus — a capacity/data limitation, honestly documented, not a capability claim. |
 | Limitations | Tiny model cannot actually know facts; SFT teaches format/response-prediction on this toy data. 10 pairs is a demonstration, not a real instruction dataset. The general ingestion pipeline (helix/corpus.py) will supply larger instruction sources in later stages. |
-| Decision | Ship SFT as a separate, versioned stage. Next: a scaled pretraining run + larger instruction dataset + preference alignment exploration only where eval justifies. |
+| Decision | Ship SFT as a separate, versioned stage. Next: agent system (planning, sandboxed tools, approval gates, audit log). |
+
+## v0.7 — Modular agent system: planning, sandboxed tools, approval gates, audit log
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | A small HELIX model can be wrapped in a rule-driven agent loop that selects and executes sandboxed tools with approval gates, resource limits, timeouts, and an auditable trace separating trusted instructions from untrusted tool output. |
+| Reference | Agent/planning patterns (ReAct, tool-use) inspected as references; agent loop, Tool interface, sandboxed PythonTool, CalculatorTool, DocumentTool, ToolRegistry, approval gate implemented independently. |
+| Techniques | helix/agent.py: Tool base class, CalculatorTool (AST-whitelisted arithmetic), PythonTool (subprocess sandbox: timeout, memory limit, temp cwd, result variable), DocumentTool (in-memory keyword lookup), ToolRegistry, Agent (plan->call->observe loop, max_steps/max_time stop conditions, approval gate for consequential tools, audit log), AgentRun/AgentStep structured traces. `helix agent` CLI with --goal, --max-steps, --max-time, --no-approval, --audit-log. |
+| Status | Implemented (helix/agent.py, helix/cli.py `helix agent`); tests/test_agent.py. |
+| Hardware | 2 vCPU, 3.85 GB RAM, CPU only. |
+| Results | 8 agent tests pass (calculator, python sandbox incl. timeout, document tool, registry, agent loop with pre-approval, rejection of unapproved consequential tools, unknown-tool handling). End-to-end `helix agent` runs on the real baseline without crashing and writes an audit log; the tiny model cannot yet plan reliably (memorized-text output) — honestly a capacity limitation. |
+| Limitations | Agent intelligence is bounded by the tiny base model (no real planning). PythonTool sandbox is best-effort (no network by default, temp cwd); host firewall/policy still governs real isolation. Approval gate is auto-approve in this non-interactive baseline (documented; interactive deployments should prompt the user). |
+| Decision | Ship agent as an auditable, rule-driven baseline. Model-driven planning improves only with scaled training — do not overclaim. Next: web/streaming interface OR scaled pretraining run. |
 
 ## Adoption policy
 
