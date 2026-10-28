@@ -41,7 +41,7 @@ jobs:
           mkdir -p "$HELIX_DATA_ROOT"
           python scripts/discover_sources.py \
             --source all \
-            --limit "${{ inputs.limit || '10' }}" \
+            --limit "${{ github.event.inputs.limit || '10' }}" \
             --root "$HELIX_DATA_ROOT" \
             --output discovery/candidates.json
       - name: Upload review-required candidate catalog
