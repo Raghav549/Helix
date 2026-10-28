@@ -95,7 +95,7 @@ jobs:
           python -m helix sft \
             --config "$ROOT/llm-config.json" \
             --base-checkpoint "$ROOT/llm/ckpt-best.pt" \
-            --sft-pairs data/sft_pairs.json \
+            --sft-pairs "$GITHUB_WORKSPACE/data/sft_pairs.json" \
             --out-dir "$ROOT/sft" \
             --max-iters "${{ inputs.sft_steps || '600' }}" \
             --block-size 128 --batch-size 6 --lr 0.0002
