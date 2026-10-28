@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -39,14 +40,34 @@ def request_json(url: str, timeout: int = 20) -> dict[str, Any]:
     if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
         raise ValueError(f"refusing non-HTTPS or unapproved metadata endpoint: {url}")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        final = urllib.parse.urlparse(response.geturl())
-        if final.scheme != "https" or final.hostname not in ALLOWED_HOSTS:
-            raise ValueError(f"metadata endpoint redirected to unapproved host: {response.geturl()}")
-        payload = json.loads(response.read(12 * 1024 * 1024 + 1))
-        if not isinstance(payload, dict):
-            raise ValueError("metadata response must be a JSON object")
-        return payload
+    retryable = {429, 500, 502, 503, 504}
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                final = urllib.parse.urlparse(response.geturl())
+                if final.scheme != "https" or final.hostname not in ALLOWED_HOSTS:
+                    raise ValueError(f"metadata endpoint redirected to unapproved host: {response.geturl()}")
+                raw = response.read(12 * 1024 * 1024 + 1)
+                if len(raw) > 12 * 1024 * 1024:
+                    raise ValueError("metadata response exceeds 12 MiB safety limit")
+                payload = json.loads(raw)
+                if not isinstance(payload, dict):
+                    raise ValueError("metadata response must be a JSON object")
+                return payload
+        except HTTPError as exc:
+            if exc.code not in retryable or attempt == 3:
+                raise
+            retry_after = exc.headers.get("Retry-After", "")
+            try:
+                delay = min(30, max(1, int(retry_after)))
+            except ValueError:
+                delay = 2 ** attempt
+            time.sleep(delay)
+        except URLError:
+            if attempt == 3:
+                raise
+            time.sleep(2 ** attempt)
+    raise RuntimeError("metadata request exhausted retry attempts")
 
 
 def _record(name: str, kind: str, url: str, license_name: str, source: str,
