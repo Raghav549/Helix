@@ -13,6 +13,8 @@ def main():
     parser.add_argument('--manifest', default='data/manifest.json')
     parser.add_argument('--output', default='artifacts/data/corpus.txt')
     args = parser.parse_args()
+    Path(args.manifest).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     heldout = ('The capital of France is', 'The secret code is ALPHA-9921.',
                'def is_even(n):', 'Water boils at 500 degrees Celsius at sea level.')
     manifest = CorpusManifest()
