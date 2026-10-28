@@ -1,0 +1,4 @@
+#!/bin/sh
+# Resolves the staged commit and enforces HELIX storage separation.
+rev=$(git write-tree 2>/dev/null) || exit 1
+HELIX_STORAGE_CHECK_COMMIT="$rev" exec python3 -m helix.storage_guard
