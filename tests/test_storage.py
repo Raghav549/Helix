@@ -43,7 +43,9 @@ def test_manifest_report_is_small_source_metadata(tmp_path):
 
 def test_migration_verifies_source_and_copy(tmp_path):
     root = resolve_data_root(tmp_path / 'external')
-    original = repository_root() / 'artifacts/llm/ckpt-final.pt'
+    # Use a deterministic fixture instead of relying on ignored local checkpoints.
+    original = tmp_path / 'source-checkpoint.pt'
+    original.write_bytes(b'HELIX storage migration fixture checkpoint')
     digest = hashlib.sha256(original.read_bytes()).hexdigest()
     migrated = migrate_verified({'llm/ckpt-final.pt': original},
                                 {'llm/ckpt-final.pt': digest},

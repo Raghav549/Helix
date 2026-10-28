@@ -4,6 +4,8 @@ import os
 import tempfile
 import time
 
+import pytest
+
 import torch
 
 from helix.agent import (
@@ -28,6 +30,8 @@ def test_calculator():
 def test_python_sandbox_computes_result():
     py = PythonTool(timeout_s=10.0, memory_mb=128)
     r = py.execute(code="result = 40 + 2\n")
+    if not r.ok and r.error and r.error.startswith("isolation unavailable"):
+        pytest.skip("host does not permit the fail-closed Linux sandbox")
     assert r.ok and "42" in r.output, r.output
     assert r.duration_s >= 0
 
@@ -35,6 +39,8 @@ def test_python_sandbox_computes_result():
 def test_python_sandbox_timeout():
     py = PythonTool(timeout_s=1.0, memory_mb=128)
     r = py.execute(code="import time; time.sleep(10)\n")
+    if not r.ok and r.error and r.error.startswith("isolation unavailable"):
+        pytest.skip("host does not permit the fail-closed Linux sandbox")
     assert not r.ok and r.error == "timeout"
 
 
@@ -85,6 +91,8 @@ def test_agent_loop_executes_preapproved_tool(monkeypatch):
 
     monkeypatch.setattr(agent, "_plan", fake_plan)
     run = agent.run("compute 40+2")
+    if run.steps and run.steps[0].result and run.steps[0].result.error and run.steps[0].result.error.startswith("isolation unavailable"):
+        pytest.skip("host does not permit the fail-closed Linux sandbox")
     assert run.stopped_reason == "completed"
     assert "42" in run.final_answer
     assert len(run.steps) == 2

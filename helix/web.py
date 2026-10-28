@@ -6,6 +6,7 @@ The server has no authentication: bind to loopback except in trusted previews.
 """
 from __future__ import annotations
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -140,6 +141,11 @@ def create_app(config_path: str = 'configs/helix-research.json',
     if vision_config is not None:
         raise ValueError('vision_config is not used by the synthetic classifier; use caption_dir for the captioner')
     app = Flask(__name__, static_folder='static', static_url_path='/static')
+    require_auth = os.getenv('HELIX_REQUIRE_AUTH', '').strip().lower() in ('1', 'true', 'yes', 'on')
+    auth_username = os.getenv('HELIX_AUTH_USERNAME', '')
+    auth_password = os.getenv('HELIX_AUTH_PASSWORD', '')
+    if require_auth and (not auth_username or not auth_password):
+        raise RuntimeError('HELIX_REQUIRE_AUTH is enabled but credentials are missing: set HELIX_AUTH_USERNAME and HELIX_AUTH_PASSWORD')
     app.config['MAX_CONTENT_LENGTH'] = 6 * 1024 * 1024
     config_path = _path(config_path)
     llm_checkpoint = _path(llm_checkpoint)
@@ -197,6 +203,21 @@ def create_app(config_path: str = 'configs/helix-research.json',
         return f'INSTRUCTION: {instruction}\nRESPONSE: ', message
 
     @app.before_request
+    def require_basic_auth():
+        # Health checks expose no application data and must remain reachable by the host.
+        if request.path == '/healthz' or not require_auth:
+            return None
+        auth = request.authorization
+        username_ok = bool(auth and hmac.compare_digest((auth.username or '').encode('utf-8'), auth_username.encode('utf-8')))
+        password_ok = bool(auth and hmac.compare_digest((auth.password or '').encode('utf-8'), auth_password.encode('utf-8')))
+        if username_ok and password_ok:
+            return None
+        response = Response('Authentication required', status=401, mimetype='text/plain')
+        response.headers['WWW-Authenticate'] = 'Basic realm="HELIX", charset="UTF-8"'
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
+    @app.before_request
     def same_origin():
         if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
             origin = request.headers.get('Origin')
@@ -228,6 +249,10 @@ def create_app(config_path: str = 'configs/helix-research.json',
     @app.errorhandler(413)
     def too_large(_exc):
         return jsonify({'error': 'request exceeds 6 MiB'}), 413
+
+    @app.get('/healthz')
+    def healthz():
+        return jsonify({'ok': True, 'service': 'helix-chat'})
 
     @app.get('/')
     def index():
