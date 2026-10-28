@@ -39,7 +39,11 @@ def request_json(url: str, timeout: int = 20) -> dict[str, Any]:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
         raise ValueError(f"refusing non-HTTPS or unapproved metadata endpoint: {url}")
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    if parsed.hostname == "api.github.com" and github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+    request = urllib.request.Request(url, headers=headers)
     retryable = {429, 500, 502, 503, 504}
     for attempt in range(4):
         try:
