@@ -110,6 +110,9 @@ def test_sft_smoke_end_to_end(tmp_path):
     )
     assert metrics["stage"] == "sft"
     assert metrics["n_pairs"] == 2
+    assert metrics["actual_iters"] <= 6
+    assert metrics["early_stopped"] is False
+    assert metrics["patience"] == 4
     assert os.path.exists(os.path.join(out_dir, "sckpt-final.pt"))
     assert os.path.exists(os.path.join(out_dir, "sft-metrics.json"))
 
