@@ -138,13 +138,16 @@ HELIX_DATA_ROOT=/media/helix/data python scripts/migrate_artifacts.py
 HELIX_DATA_ROOT=/media/helix/data python scripts/migrate_artifacts.py --check
 ```
 
-The initial source pipeline reads the MIT-licensed HELIX seed corpus from
-external storage, filters benchmark names, deduplicates and writes a new
-corpus version:
+The initial source pipeline reads the MIT-licensed HELIX seed corpus from the
+repository, copies it to external `raw/` storage without a network request,
+filters benchmark names, deduplicates and writes deterministic splits:
 
 ```sh
 HELIX_DATA_ROOT=/media/helix/data python -m helix sources
 ```
 
-This does not download third-party material and does not overwrite existing
-corpus versions without a verified manifest.
+This does not download third-party material. The catalog currently has one
+deterministic six-topic seed, so a rerun writes the same `corpus/train.txt`,
+`val.txt` and `test.txt` names and their SHA-256 files. Preserve a prior run
+by copying the whole `corpus/` directory before rerunning; the external-root
+layout intentionally keeps these generated files out of Git.

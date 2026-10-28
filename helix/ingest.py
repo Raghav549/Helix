@@ -6,6 +6,7 @@ import email
 import hashlib
 import json
 import os
+import shutil
 import time
 import urllib.error
 import urllib.parse
@@ -14,7 +15,7 @@ from http.client import HTTPConnection
 from dataclasses import dataclass
 from pathlib import Path
 
-from helix.storage import StorageError, resolve, resolve_data_root
+from helix.storage import REPOSITORY_ROOT, StorageError, resolve, resolve_data_root
 from helix.sources import Catalog, SourceRecord
 
 DEFAULT_MAX_FILE_BYTES = 256 * 1024 * 1024
@@ -63,11 +64,12 @@ def _safe_name(name: str, url: str) -> str:
     stem = Path(label).stem.replace('/', '_').replace('\\', '_')
     if len(stem) > 96:
         stem = stem[:96]
-    return f'{name}--{stem}'
+    return f'{name}--{stem}.txt'
 
 
 def ingest_source(record: SourceRecord,
                   root: os.PathLike[str] | str | None = None,
+                  local_path: os.PathLike[str] | str | None = None,
                   max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
                   max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES) -> IngestResult:
     """Download one source to ``raw/`` with size, total-byte and hash guards."""
@@ -75,6 +77,9 @@ def ingest_source(record: SourceRecord,
     if record.decision != 'eligible':
         raise StorageError(f'source {record.name} is not eligible for ingest')
     url = _validate_url(record.url)
+    source_path = Path(local_path) if local_path else None
+    if source_path is not None and not source_path.is_absolute():
+        source_path = REPOSITORY_ROOT / source_path
     destination = resolve(f'raw/{_safe_name(record.name, url)}', storage_root)
     destination.parent.mkdir(parents=True, exist_ok=True)
     total = sum(path.stat().st_size for path in (storage_root / 'raw').glob('**/*')
@@ -84,6 +89,24 @@ def ingest_source(record: SourceRecord,
 
     request = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
     resumed = False
+    if source_path is not None:
+        # Authored or locally staged content is copied without a network read.
+        # The existing raw hash remains unchanged if the bytes are identical.
+        digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        if destination.is_file():
+            previous = hashlib.sha256(destination.read_bytes()).hexdigest()
+            if previous == digest:
+                return IngestResult(record.name,
+                                    destination.relative_to(storage_root).as_posix(),
+                                    destination.stat().st_size, digest, 'text/plain', '', True)
+        if source_path.stat().st_size > max_file_bytes:
+            raise StorageError(f'source exceeds {max_file_bytes} bytes')
+        if total + source_path.stat().st_size > max_total_bytes:
+            raise StorageError('external raw storage quota exhausted')
+        destination.write_bytes(source_path.read_bytes())
+        return IngestResult(record.name,
+                            destination.relative_to(storage_root).as_posix(),
+                            source_path.stat().st_size, digest, 'text/plain', '', destination.is_file())
     if destination.is_file():
         existing = hashlib.sha256(destination.read_bytes()).hexdigest()
         request.add_header('Range', f'bytes={destination.stat().st_size}-')

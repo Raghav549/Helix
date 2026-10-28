@@ -89,6 +89,7 @@ def test_ingest_writes_hashed_file_with_local_server(tmp_path, monkeypatch):
         result = ingest_source(record, root=root, max_total_bytes=len(body) + 1)
         assert result.size_bytes == len(body)
         assert Path(root, result.path).read_bytes() == body
+        assert result.path.endswith('.txt')
         assert len(result.sha256) == 64
     finally:
         server.shutdown()

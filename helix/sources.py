@@ -27,7 +27,8 @@ class SourceRecord:
     url: str
     license: str
     license_evidence: str
-    permitted_uses: tuple[str, ...] = ()
+    permitted_uses: tuple[str, ...] = ('store',)
+    source_url: str = ''
     language: str = ''
     format: str = ''
     retrieval_date: str = ''
@@ -39,6 +40,9 @@ class SourceRecord:
     @classmethod
     def from_json(cls, item: dict[str, Any]) -> 'SourceRecord':
         item = dict(item)
+        # The existing ``url`` field is the retrieval URL; ``source_url`` is the
+        # exact reviewed content location when it differs from the landing page.
+        item.setdefault('source_url', item.get('url', ''))
         item['permitted_uses'] = tuple(item.get('permitted_uses', []))
         item['versions'] = list(item.get('versions', []))
         unknown = set(item) - set(cls.__dataclass_fields__)

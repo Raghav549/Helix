@@ -25,7 +25,10 @@ data/merges.json
 checkpoints/
 *.log
 
-artifacts/
+artifacts/*
+!artifacts/README.md
+!artifacts/WEIGHTS_LICENSE.txt
+!artifacts/SHA256SUMS
 # OS
 .DS_Store
 Thumbs.db

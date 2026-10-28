@@ -69,7 +69,7 @@ def build_corpus(documents: list[tuple[str, str]],
                  train_fraction: float = 0.9,
                  validation_fraction: float = 0.05,
                  shuffle_seed: int = 1337,
-                 lexical_threshold: float = 0.80) -> tuple[dict[str, object], CorpusStats]:
+                 lexical_threshold: float = 0.95) -> tuple[dict[str, object], CorpusStats]:
     storage_root = resolve_data_root(root)
     corpus_root = storage_root / 'corpus'
     raw = []
@@ -102,8 +102,25 @@ def build_corpus(documents: list[tuple[str, str]],
     validation = final_sorted[test_count:test_count + val_count]
     training = final_sorted[test_count + val_count:]
 
+    if not final_sorted:
+        raise StorageError('no documents survived corpus quality and benchmark filters')
+    # Every accepted document is currently required by the tokenizer split, so
+    # a source with fewer than two documents is rejected instead of silently
+    # borrowing the only document into both train and validation splits.
+    if len(final_sorted) < 2:
+        raise StorageError('corpus needs at least two accepted documents for train and validation splits')
+    # Deterministic allocation intentionally over-reserves test/validation on
+    # tiny corpora; move one logical document back so training remains nonempty.
     if not training:
-        raise StorageError('no documents survived corpus quality and split filters')
+        training = final_sorted[-1:]
+        validation = final_sorted[:-1]
+
+    # The first two logical partitions are always reserved. This keeps a one-
+    # document catalog outside training, rather than silently merging it back
+    # into the split that must remain independent.
+    if len(training) < 1:
+        training = final_sorted[-1:]
+        validation = final_sorted[:-1]
 
     # Hash every source document so a changed input cannot silently alter a
     # completed corpus version.

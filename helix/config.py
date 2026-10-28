@@ -117,13 +117,15 @@ def load_config(path: str) -> HelixConfig:
         candidate = Path(os.path.expanduser(value))
         if candidate.is_absolute():
             return candidate.as_posix()
-        # Preserve an existing external artifact path if it already exists;
-        # otherwise resolve a new path below HELIX_DATA_ROOT.
         external = resolve_data_root() / candidate
-        if candidate.parts[0] == 'artifacts' and candidate.as_posix().startswith('artifacts/'):
-            local = REPOSITORY_ROOT / candidate
-            if external.is_file() or (local.is_file() and not (candidate.as_posix().startswith('artifacts/data/') and external.is_file())):
-                pass
+        if external.exists():
+            return str(external)
+        # Small authored corpora remain checked in; generated corpora and all
+        # other artifacts live outside the repository. An existing repository
+        # path is therefore selected only for corpus text, never for data.
+        local = REPOSITORY_ROOT / candidate
+        if candidate.name == 'seed_corpus.txt' and local.is_file():
+            return str(local)
         return str(external)
 
     cfg.data.train_file = storage_to_external(cfg.data.train_file)

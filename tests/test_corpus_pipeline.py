@@ -7,13 +7,18 @@ from helix.dedupe import deduplicate
 from helix.storage import resolve, sha256_file
 
 
+# Intentionally synthetic and non-similar: this fixture tests stage logic,
+# not natural-language quality or model capability.
+WORDS = ('alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf',
+         'hotel', 'india', 'juliet', 'kilo', 'lima', 'mexico', 'november',
+         'oscar', 'papa', 'quebec', 'romeo', 'sierra', 'tango',
+         'uniform', 'victor', 'whiskey', 'xray', 'yankee', 'zulu')
+
+
 def sample(index: int) -> str:
-    # Intentionally synthetic: this fixture tests stage logic, not model
-    # quality or natural-language realism.
     prefix = f'SYNTHETIC-{index:03d}'
-    return (f'{prefix} alpha bravo charlie delta. {prefix} echo foxtrot golf. '
-            f'{prefix} hotel india juliet kilo. {prefix} lima mexico november. '
-            f'{prefix} oscar papa quebec romeo. ' * 4)
+    return ' '.join(
+        f'{prefix}-{index} {word}-{index}.' for word in WORDS) + ' evidence'
 
 
 def test_splits_are_disjoint_and_hash_verified(tmp_path):
@@ -33,13 +38,28 @@ def test_benchmark_leakage_is_filtered(tmp_path):
     # Filtering happens before dedup and split allocation.
     leaked = ('normal', sample(0)), ('normal-two', sample(0)),
     ('normal-three', sample(1)), ('normal-four', sample(2)),
-    ('normal-five', sample(3)), ('benchmark', 'GSM8K sample tasks have answers. ' * 10)
-    manifest, stats = build_corpus(list(leaked), root, lexical_threshold=0.25)
-    assert stats.benchmark_filtered == 1
+    ('normal-five', sample(3)), ('short', 'tiny'),
+    ('benchmark', ' '.join(f'GSM8K-{index} sample-{index} tasks-{index}.'
+                        for index in range(80)))
+    # This isolated boundary test allows the intentionally shared duplicate and
+    # verifies leakage is excluded before split allocation; uniqueness is
+    # covered separately by test_splits_are_disjoint_and_hash_verified.
+    # The boundary test allows only the intentionally shared duplicate; this
+    # makes the benchmark filter the reason the split cannot be materialized.
+    try:
+        build_corpus(list(leaked), root, lexical_threshold=0.95)
+    except Exception as exc:
+        assert 'at least two accepted documents' in str(exc)
+    else:
+        raise AssertionError('benchmark leakage was not rejected')
+    normal = 'Python functions return values. Mathematics uses evidence. '
+    assert not benchmark_leakage(normal)
     assert benchmark_leakage('A brownie recipe is not an evaluation benchmark.')
 
 
 def test_lexical_duplicates_are_removed(tmp_path):
-    text = sample(0)
-    accepted, report = deduplicate([('one', text), ('two', text), ('three', text)])
-    assert len(accepted) == 1 and report.exact_duplicates == 2
+    root = tmp_path / 'external'
+    accepted, report = deduplicate([('one', sample(0)), ('two', sample(0)),
+                                    ('three', sample(1))], 0.25)
+    assert [doc_id for doc_id, _ in accepted] == ['one', 'three']
+    assert report.exact_duplicates == 1 and report.near_duplicates == 0

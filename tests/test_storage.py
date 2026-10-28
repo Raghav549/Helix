@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
 from helix.manifests import Manifest, ManifestRecord
-from helix.storage import (StorageError, ensure_space, migrate_verified,
-                           repository_root, resolve_data_root, resolve,
+from helix.storage import (REPOSITORY_ROOT as REPO_ROOT, StorageError, ensure_space,
+                           migrate_verified, repository_root, resolve_data_root, resolve,
                            sha256_file, validate_storage_layout)
 
 
@@ -88,7 +89,7 @@ def test_direct_dataclass_does_not_resolve_external(tmp_path):
                                       vocab_file='data/vocab.json',
                                       merges_file='data/merges.json',
                                       corpus_file='data/seed_corpus.txt'))
-    assert cfg.data.corpus_file.startswith(str(repository_root()))
+    assert cfg.data.corpus_file == 'data/seed_corpus.txt'
     assert cfg.train.out_dir.startswith(str(tmp_path))
 
 
@@ -97,11 +98,90 @@ def test_cli_source_run_builds_external_corpus(tmp_path):
     # the repository and that the initial authored seed is accepted.
     root = tmp_path / 'external'
     root.mkdir(parents=True, exist_ok=True)
-    Path(root / 'seed_corpus.txt').write_text(
-        'Python functions return values. Mathematics uses evidence. '
-        'History examines dates and consequences. ' * 8, encoding='utf-8')
-    from helix.cli import main
-    assert main(['sources', '--data-root', str(root)]) == 0
+    # A private catalog avoids the network-only authored-source special case.
+    (root / 'seed_corpus.txt').write_text(
+        'HELIX-A: Python functions return values. Mathematics uses evidence. '
+        'A first document must have enough tokens for training.\n\n'
+        'HELIX-B: Code must be executable. Measurements include uncertainty. '
+        'A second document must be held out from tokenizer training.\n', encoding='utf-8')
+    import http.server
+    import json
+    import threading
+    bodies = {'/document-one.txt': (
+                  '\n\n'.join(
+                      f'HELIX TRAINING DOCUMENT ONE SECTION {index}. ' +
+                      ' '.join(
+                          f'{word}{word}'
+                          for word in (
+                              'pyre', 'latus', 'solve', 'works', 'proof',
+                              'system', 'energy', 'maths', 'method', 'science',
+                              'source', 'logic', 'seven', 'forward', 'factor',
+                              'counter', 'qualm', 'vertex', 'theorem', 'value',
+                              'design', 'cipher', 'number', 'motion', 'result',
+                              'memory', 'record', 'linear', 'gradient',
+                              'pencil', 'island', 'signal', 'context',
+                              'maple', 'vector', 'object', 'forty', 'phase',
+                              'units', 'curve', 'basic', 'native'
+                          )[: index % 15 + index // 15]
+                      ) for index in range(10))).encode(),
+              '/document-two.txt': (
+                  '\n\n'.join(
+                      f'HELIX VALIDATION DOCUMENT TWO SECTION {index}. ' +
+                      ' '.join(
+                          f'{word}{word}'
+                          for word in (
+                              'ample', 'bronze', 'fabric', 'gather', 'harbor',
+                              'knot', 'lunar', 'marine', 'needle', 'ocean',
+                              'prairie', 'quartz', 'rabbit', 'solstice', 'timber',
+                              'urban', 'velvet', 'willow', 'yellow', 'zenith',
+                              'azure', 'boulder', 'cedar', 'delta', 'ember',
+                              'fjord', 'granite', 'harvest', 'ivory', 'jade',
+                              'kestrel', 'lavender', 'meadow', 'nectar', 'opal',
+                              'pine', 'quail', 'ridge', 'silver', 'tundra'
+                          )[: index % 15 + index // 15]
+                      ) for index in range(10))).encode()}
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            content = bodies[self.path]
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', str(len(content)))
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(content)
+        def log_message(self, *args): pass
+    server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f'http://127.0.0.1:{server.server_address[1]}'
+    (root / 'manifests').mkdir()
+    (root / 'manifests' / 'sources.json').write_text(json.dumps(
+        {"version": 1, "generated_by": "test", "sources": [
+            {"name": "document-one", "kind": "text",
+             "url": base_url + "/document-one.txt",
+             "license": "MIT", "license_evidence": "verified",
+             "permitted_uses": ["train"], "decision": "eligible"},
+            {"name": "document-two", "kind": "text",
+             "url": base_url + "/document-two.txt",
+             "license": "MIT", "license_evidence": "verified",
+             "permitted_uses": ["train"], "decision": "eligible"}]}), encoding='utf-8')
+    try:
+        from helix.cli import main
+        assert main(['sources', '--data-root', str(root)]) == 0
+    finally:
+        server.shutdown()
     assert (root / 'corpus' / 'train.txt').is_file()
     assert not (Path(repository_root()) / 'corpus').exists()
     assert not (Path(repository_root()) / 'outputs').exists()
+
+
+def test_tokenizer_round_trip_in_external_storage(tmp_path):
+    from helix.tokenizer import ByteLevelBPETokenizer
+    tok = ByteLevelBPETokenizer()
+    tok.train(['Python returns values. HELIX trains from random initialization. ' * 4], 280)
+    vocab = tmp_path / 'vocab.json'
+    merges = tmp_path / 'merges.json'
+    tok.save(str(vocab), str(merges))
+    text = 'Python returns values.'
+    assert ByteLevelBPETokenizer.load(str(vocab), str(merges)).decode(
+        tok.encode(text, add_eos=True)).startswith(text)

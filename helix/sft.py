@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 import time
 from dataclasses import asdict
 from typing import List, Tuple
@@ -100,21 +101,20 @@ def build_instruction_pairs(corpus_file: str) -> List[Tuple[str, str]]:
                     pairs.append(("Answer: " + pending_question, utt))
                 pending_question = None
 
-    # Fallback synthetic pairs from definitional sentences if the corpus has
-    # no dialogue/Q&A structure.
-    if not pairs:
-        for sent in re.split(r"[.!?]+", text):
-            sent = _clean(sent)
-            if len(sent) < 8:
-                continue
-            low = sent.lower()
-            if any(w in low for w in (" is ", " are ", " means ", " was ", " were ")):
-                topic = sent.split(" is ")[0].strip()[:40]
-                instr = f"What is {topic}?" if topic else f"Explain: {sent[:40]}"
-                key = (instr, sent)
-                if key not in seen:
-                    seen.add(key)
-                    pairs.append((instr, sent))
+    # Fallback synthetic pairs from declarative sentences. These are deterministic
+    # auditable prompts for the authored smoke corpus, not claimed domain knowledge.
+    for sent in re.split(r"[.!?]+", text):
+        sent = _clean(sent)
+        if len(sent) < 12:
+            continue
+        low = sent.lower()
+        if any(w in low for w in (" is ", " are ", " means ", " was ", " were ")):
+            topic = re.sub(r"^the |^a |^an ", "", sent.split(" is ")[0].strip())[:48]
+            instr = f"Review this authored claim about {topic}:" if topic else f"Review this authored claim: {sent[:40]}"
+            key = (instr, sent)
+            if key not in seen:
+                seen.add(key)
+                pairs.append((instr, sent))
 
     return pairs
 
@@ -191,8 +191,18 @@ def train_sft(config_path: str, base_checkpoint: str, sft_pairs_file: str,
     """SFT on a deterministic train/holdout split, with response-only loss."""
     import hashlib
     from helix.runtime import configure_threads
+    from helix.storage import resolve_data_root
     if min(max_iters, eval_interval, batch_size) < 1:
         raise ValueError("iterations, interval and batch size must be positive")
+    # All experiment artifacts, including temporary instruction data, live in
+    # the configured external root; no temporary data is written to the repo.
+    temporary_dir = resolve_data_root(os.environ.get('HELIX_DATA_ROOT')) / 'artifacts/sft-smoke'
+    temporary_dir.mkdir(parents=True, exist_ok=True)
+    pairs_path = temporary_dir / Path(sft_pairs_file).name
+    if not Path(sft_pairs_file).is_absolute():
+        pairs_path = temporary_dir / sft_pairs_file
+    pairs_path.write_text(Path(sft_pairs_file).read_text(encoding='utf-8'), encoding='utf-8')
+    sft_pairs_file = str(pairs_path)
     torch.manual_seed(seed)
     np.random.seed(seed)
     configure_threads()

@@ -14,6 +14,7 @@ REPO = Path(web.PROJECT_ROOT)
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(web, 'PROJECT_ROOT', str(tmp_path))
+    monkeypatch.setattr(web, 'resolve_data_root', lambda *args, **kwargs: tmp_path)
     app = web.create_app(
         config_path=str(REPO / 'configs/helix-research.json'),
         llm_checkpoint=str(REPO / 'artifacts/sft/sckpt-best.pt'),
@@ -182,6 +183,7 @@ def test_long_multibyte_image_prompts_are_rejected(client):
 
 def test_explicit_external_origin_allows_tls_offload_but_rejects_other_origins(tmp_path, monkeypatch):
     monkeypatch.setattr(web, 'PROJECT_ROOT', str(tmp_path))
+    monkeypatch.setattr(web, 'resolve_data_root', lambda *args, **kwargs: tmp_path)
     public = 'https://8766-example.e2b.app'
     app = web.create_app(external_origin=public)
     client = app.test_client()

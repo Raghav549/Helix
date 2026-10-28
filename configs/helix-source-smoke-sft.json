@@ -1,0 +1,48 @@
+{
+  "model": {
+    "vocab_size": 512,
+    "block_size": 64,
+    "n_layer": 2,
+    "n_head": 4,
+    "n_embd": 64,
+    "n_kv_head": 2,
+    "dropout": 0.0,
+    "bias": false,
+    "eps": 1e-05,
+    "rope_base": 10000.0,
+    "weight_tying": true,
+    "grad_checkpoint": false,
+    "block_type": "transformer"
+  },
+  "train": {
+    "batch_size": 2,
+    "block_size": 64,
+    "max_iters": 20,
+    "eval_interval": 20,
+    "eval_iters": 2,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.1,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "gradient_accumulation_steps": 1,
+    "lr_decay_iters": 20,
+    "min_lr": 0.0001,
+    "warmup_iters": 2,
+    "seed": 1337,
+    "device": "cpu",
+    "dtype": "float32",
+    "log_interval": 10,
+    "save_interval": 20,
+    "out_dir": "artifacts/source-smoke/sft",
+    "resume_from": null
+  },
+  "data": {
+    "train_file": "artifacts/source-smoke/data/train.npy",
+    "val_file": "artifacts/source-smoke/data/val.npy",
+    "vocab_file": "artifacts/source-smoke/data/vocab.json",
+    "merges_file": "artifacts/source-smoke/data/merges.json",
+    "corpus_file": "corpus/train.txt",
+    "train_frac": 0.9
+  }
+}
