@@ -17,8 +17,10 @@ def test_ablation_runs_and_reports(tmp_path):
                           eval_interval=4, eval_iters=4, learning_rate=1e-3,
                           warmup_iters=2, lr_decay_iters=8, log_interval=4,
                           save_interval=8, out_dir=str(tmp_path / "out")),
-        data=DataConfig(train_file="data/train.npy", val_file="data/val.npy",
-                        vocab_file="data/vocab.json", merges_file="data/merges.json",
+        data=DataConfig(train_file=str(tmp_path / "train.npy"),
+                        val_file=str(tmp_path / "val.npy"),
+                        vocab_file=str(tmp_path / "vocab.json"),
+                        merges_file=str(tmp_path / "merges.json"),
                         corpus_file="data/seed_corpus.txt", train_frac=0.9),
     )
     cfg_path = tmp_path / "config.json"

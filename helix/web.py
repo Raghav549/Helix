@@ -1,579 +1,603 @@
-"""HELIX integrated local web interface.
+"""Local integrated HELIX application. No paid APIs or pretrained models.
 
-A single Flask app exposing all first-class capability areas through one
-coherent UI:
-  * LLM chat (streaming, CPU model from random init)
-  * Image generation (latent diffusion from random init)
-  * Image understanding/upload-analysis (ViT -> LLM)
-  * Coding sandbox (PythonTool execution, explain/fix)
-  * Research lab (experiment tracker, run & view metrics)
-
-CPU-first; all models load lazily on first request so the UI starts fast.
-No paid APIs; everything runs locally.
+The bundled models are small research prototypes, not production assistants.
+Code execution is explicitly approved and fails closed without Linux isolation.
+The server has no authentication: bind to loopback except in trusted previews.
 """
-
 from __future__ import annotations
-
+import hashlib
+import io
 import json
 import os
+import re
+import threading
 import time
+import uuid
+from dataclasses import asdict
+from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
-from flask import Flask, Response, jsonify, render_template_string, request, send_file
+from flask import Flask, Response, jsonify, request, send_from_directory
+from PIL import Image, ImageOps, UnidentifiedImageError
 
-from helix.agent import Agent, ToolRegistry
-from helix.config import HelixConfig, ModelConfig
-from helix.data import load_ids
-from helix.image_gen import ImageGenConfig, LatentDiffusion, generate_images, load_image_gen_model
-from helix.image_understanding import (
-    ImageUnderstandingConfig,
-    MultimodalHelix,
-    load_multimodal_model,
-)
-from helix.infer import generate as text_generate, load_model_and_tokenizer
-from helix.tokenizer import ByteLevelBPETokenizer
-
-
-# ---------------------------------------------------------------------------
-# Lazy model holders
-# ---------------------------------------------------------------------------
-
-class ModelCache:
-    def __init__(self) -> None:
-        self._llm = None
-        self._llm_tok = None
-        self._llm_cfg = None
-        self._image_gen = None
-        self._image_gen_cfg = None
-        self._mm = None
-        self._mm_cfg = None
-        self._vis_cfg = None
-
-    def llm(self, config_path: str, checkpoint: str):
-        if self._llm is None:
-            model, tok, cfg = load_model_and_tokenizer(config_path, checkpoint)
-            self._llm, self._llm_tok, self._llm_cfg = model, tok, cfg
-        return self._llm, self._llm_tok, self._llm_cfg
-
-    def image_gen(self, config_path: str, checkpoint: str):
-        if self._image_gen is None:
-            import json
-            with open(config_path, encoding="utf-8") as f:
-                raw = json.load(f)
-            cfg = ImageGenConfig(**raw.get("image_gen", raw))
-            model = load_image_gen_model(cfg, checkpoint)
-            self._image_gen, self._image_gen_cfg = model, cfg
-        return self._image_gen, self._image_gen_cfg
-
-    def multimodal(self, llm_config_path: str, llm_checkpoint: str,
-                   vision_config_path: str, vision_checkpoint: str):
-        if self._mm is None:
-            import json
-            with open(llm_config_path, encoding="utf-8") as f:
-                llm_raw = json.load(f)
-            with open(vision_config_path, encoding="utf-8") as f:
-                vis_raw = json.load(f)
-            llm_cfg = ModelConfig(**llm_raw.get("model", llm_raw))
-            vis_cfg = ImageUnderstandingConfig(**vis_raw.get("image_understanding", vis_raw))
-            model = load_multimodal_model(llm_cfg, vis_cfg, vision_checkpoint)
-            self._mm, self._mm_cfg, self._vis_cfg = model, llm_cfg, vis_cfg
-        return self._mm, self._mm_cfg, self._vis_cfg
-
-
-MODELS = ModelCache()
+from helix.memory import MemoryStore
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(APP_ROOT)
 
 
-# ---------------------------------------------------------------------------
-# HTML UI (single page, tabs)
-# ---------------------------------------------------------------------------
-
-HTML = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HELIX — Integrated AI Platform</title>
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-         margin: 0; background: #0b0c10; color: #c5c6c7; }
-  header { background: #1f2833; padding: 1rem 2rem; display: flex;
-           align-items: center; gap: 1rem; border-bottom: 1px solid #45a29e; }
-  header h1 { font-size: 1.25rem; margin: 0; color: #45a29e; letter-spacing: 0.1em; }
-  header .tag { font-size: 0.75rem; color: #66fcf1; background: #1b2631;
-                padding: 0.15rem 0.5rem; border-radius: 4px; border: 1px solid #45a29e; }
-  .tabs { display: flex; border-bottom: 1px solid #1f2833; overflow-x: auto; }
-  .tab { flex-shrink: 0; padding: 0.75rem 1.25rem; cursor: pointer;
-         color: #66fcf1; background: #11141a; border-bottom: 2px solid transparent;
-         border-right: 1px solid #1f2833; font-size: 0.9rem; }
-  .tab:hover { background: #161b22; color: #fff; }
-  .tab.active { color: #45a29e; border-bottom-color: #45a29e; background: #0b0c10; }
-  .panels { display: none; padding: 1.5rem; gap: 1rem; }
-  .panels.show { display: grid; grid-template-columns: 1fr; gap: 1rem; }
-  @media (min-width: 900px) { .panels.show { grid-template-columns: 1fr 1fr; } }
-  .card { background: #11141a; border: 1px solid #1f2833; border-radius: 8px;
-          padding: 1rem; }
-  .card h3 { margin: 0 0 0.75rem 0; color: #45a29e; font-size: 1rem;
-             display: flex; justify-content: space-between; align-items: center; }
-  .card h3 .small { font-size: 0.7rem; color: #66fcf1; font-weight: normal; }
-  label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 0.35rem; }
-  input, textarea, select { width: 100%; background: #0b0c10; border: 1px solid #1f2833;
-        color: #c5c6c7; padding: 0.5rem; border-radius: 4px; font-size: 0.9rem; }
-  textarea { min-height: 90px; resize: vertical; font-family: ui-monospace, SFMono-Regular, monospace; }
-  button { background: #45a29e; color: #0b0c10; border: none; padding: 0.55rem 1rem;
-           border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 0.9rem; }
-  button:hover { background: #66fcf1; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  button.secondary { background: #1f2833; color: #c5c6c7; }
-  button.secondary:hover { background: #2a3640; color: #fff; }
-  .row { display: flex; gap: 0.75rem; align-items: flex-end; }
-  .flex1 { flex: 1; }
-  #chat-log { background: #0b0c10; border: 1px solid #1f2833; border-radius: 6px;
-              padding: 0.75rem; min-height: 260px; max-height: 420px; overflow-y: auto;
-              font-size: 0.85rem; line-height: 1.5; }
-  .msg { margin-bottom: 0.6rem; padding: 0.5rem 0.75rem; border-radius: 6px;
-         white-space: pre-wrap; font-size: 0.9rem; }
-  .msg.user { background: #161b22; border-left: 3px solid #45a29e; }
-  .msg.assistant { background: #0f1721; border-left: 3px solid #66fcf1; }
-  .msg.system { color: #888; font-size: 0.75rem; font-style: italic; }
-  .typing { color: #66fcf1; font-style: italic; }
-  .img-wrap { border: 1px solid #1f2833; border-radius: 6px; padding: 0.5rem;
-              text-align: center; background: #0b0c10; }
-  .img-wrap img { max-width: 100%; max-height: 300px; border-radius: 4px;
-                  border: 1px solid #1f2833; }
-  .code-out { background: #0b0c10; border: 1px solid #1f2833; border-radius: 6px;
-              padding: 0.6rem; font-family: ui-monospace, monospace; font-size: 0.8rem;
-              white-space: pre-wrap; max-height: 220px; overflow-y: auto; color: #a4ffb1; }
-  .exp-list { font-size: 0.85rem; }
-  .exp-item { padding: 0.4rem 0.6rem; border-bottom: 1px solid #1f2833;
-              display: flex; justify-content: space-between; align-items: center; }
-  .badge { font-size: 0.65rem; padding: 0.1rem 0.4rem; border-radius: 3px;
-           background: #1f2833; color: #66fcf1; }
-  .muted { color: #888; font-size: 0.8rem; }
-  .status { display: flex; gap: 1rem; font-size: 0.8rem; color: #888; margin-bottom: 0.5rem; }
-  .status .item { display: flex; align-items: center; gap: 0.3rem; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: #333; }
-  .dot.on { background: #45a29e; box-shadow: 0 0 6px #45a29e; }
-</style>
-</head>
-<body>
-<header>
-  <h1>HELIX</h1>
-  <span class="tag">CPU-FIRST &bull; OPEN-SOURCE &bull; RANDOM-INIT</span>
-</header>
-<div class="tabs">
-  <div class="tab active" onclick="openTab(event,'chat')">Chat</div>
-  <div class="tab" onclick="openTab(event,'image')">Image Generation</div>
-  <div class="tab" onclick="openTab(event,'vision')">Image Understanding</div>
-  <div class="tab" onclick="openTab(event,'code')">Coding Agent</div>
-  <div class="tab" onclick="openTab(event,'research')">Research Lab</div>
-</div>
-
-<div id="chat" class="panels show">
-  <div class="card">
-    <h3>Helix Chat <span class="small">streaming LLM</span></h3>
-    <div class="status"><div class="item"><div class="dot on"></div>CPU model loaded</div></div>
-    <div id="chat-log">
-      <div class="msg system">HELIX chat ready. Type a message below.</div>
-    </div>
-    <div class="row">
-      <input id="chat-input" type="text" placeholder="Ask HELIX anything..."
-             onkeypress="if(event.key==='Enter') sendChat()">
-      <button onclick="sendChat()">Send</button>
-    </div>
-  </div>
-</div>
-
-<div id="image" class="panels">
-  <div class="card flex1">
-    <h3>Image Generation <span class="small">latent diffusion (random init)</span></h3>
-    <label>Prompt</label>
-    <textarea id="img-prompt" placeholder="a small red cube on a blue background"></textarea>
-    <button class="flex1" onclick="genImage()">Generate Image</button>
-    <div class="img-wrap" id="img-out" style="margin-top:0.75rem;min-height:200px;">
-      <div class="muted">Generated image appears here</div>
-    </div>
-  </div>
-</div>
-
-<div id="vision" class="panels">
-  <div class="card flex1">
-    <h3>Image Understanding <span class="small">upload + analyze</span></h3>
-    <label>Image file</label>
-    <input type="file" id="vision-file" accept="image/*">
-    <button class="flex1" style="margin-top:0.5rem;" onclick="analyzeImage()">Analyze Image</button>
-    <div class="img-wrap" id="vision-img" style="margin-top:0.5rem;min-height:160px;">
-      <div class="muted">Uploaded image preview</div>
-    </div>
-    <div id="vision-out" class="card" style="margin-top:0.75rem;"></div>
-  </div>
-</div>
-
-<div id="code" class="panels">
-  <div class="card flex1">
-    <h3>Coding Agent <span class="small">sandboxed Python</span></h3>
-    <label>Code</label>
-    <textarea id="code-input" placeholder="result = 40 + 2
-print(result)"></textarea>
-    <div class="row" style="margin-top:0.5rem;">
-      <button onclick="runCode()">Execute</button>
-      <button class="secondary" onclick="explainCode()">Explain / Fix</button>
-    </div>
-    <div class="code-out" id="code-out">Output appears here.</div>
-  </div>
-</div>
-
-<div id="research" class="panels">
-  <div class="card flex1">
-    <h3>Research Lab <span class="small">experiment tracker</span></h3>
-    <button class="flex1 secondary" onclick="listExperiments()">Refresh Experiments</button>
-    <div id="research-out" class="exp-list" style="margin-top:0.75rem;"></div>
-    <div class="muted" style="margin-top:0.5rem;">Runs, metrics, and artifacts are stored under out/.</div>
-  </div>
-</div>
-
-<script>
-function openTab(evt, name){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  evt.currentTarget.classList.add('active');
-  document.querySelectorAll('.panels').forEach(p=>p.classList.remove('show'));
-  document.getElementById(name).classList.add('show');
-}
-
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-
-function addChat(role, text){
-  const log = document.getElementById('chat-log');
-  const div = document.createElement('div');
-  div.className = 'msg ' + role;
-  div.textContent = (role==='system'?'[system] ':'') + esc(text);
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-}
-
-async function sendChat(){
-  const input = document.getElementById('chat-input');
-  const text = input.value.trim();
-  if(!text) return;
-  input.value = '';
-  addChat('user', text);
-  addChat('assistant', '');
-  const last = document.getElementById('chat-log').lastElementChild;
-  last.className = 'msg assistant typing';
-  last.textContent = '';
-  try{
-    const res = await fetch('/api/chat', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({message: text})
-    });
-    const data = await res.json();
-    last.className = 'msg assistant';
-    last.textContent = data.reply || '(no reply)';
-  }catch(e){
-    last.className = 'msg assistant';
-    last.textContent = 'Error: ' + esc(String(e));
-  }
-  last.scrollIntoView({behavior:'smooth'});
-}
-
-async function genImage(){
-  const ta = document.getElementById('img-prompt');
-  const prompt = ta.value.trim();
-  if(!prompt){ alert('Enter a prompt'); return; }
-  const out = document.getElementById('img-out');
-  out.innerHTML = '<div class="muted">Generating...</div>';
-  try{
-    const res = await fetch('/api/image/generate', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({prompt: prompt})
-    });
-    const data = await res.json();
-    if(data.image_url){
-      out.innerHTML = '<img src="' + data.image_url + '?t=' + Date.now() +
-                      '" alt="generated"><div class="muted" style="margin-top:0.4rem;">' +
-                      esc(prompt) + '</div>';
-    } else {
-      out.innerHTML = '<div style="color:#ff6b6b;">' + esc(data.error||'generation failed') + '</div>';
-    }
-  }catch(e){
-    out.innerHTML = '<div style="color:#ff6b6b;">Error: ' + esc(String(e)) + '</div>';
-  }
-}
-
-let visionUrl = null;
-document.getElementById('vision-file').addEventListener('change', function(e){
-  const f = e.target.files[0];
-  if(!f) return;
-  visionUrl = URL.createObjectURL(f);
-  document.getElementById('vision-img').innerHTML = '<img src="'+visionUrl+'" alt="upload">';
-});
-
-async function analyzeImage(){
-  if(!visionUrl){ alert('Upload an image first'); return; }
-  const out = document.getElementById('vision-out');
-  out.innerHTML = '<div class="muted">Analyzing...</div>';
-  const fd = new FormData();
-  const f = document.getElementById('vision-file').files[0];
-  fd.append('image', f);
-  try{
-    const res = await fetch('/api/image/analyze', { method:'POST', body: fd });
-    const data = await res.json();
-    out.innerHTML = '<div style="white-space:pre-wrap;">' + esc(data.description||data.error||'') + '</div>';
-  }catch(e){
-    out.innerHTML = '<div style="color:#ff6b6b;">Error: ' + esc(String(e)) + '</div>';
-  }
-}
-
-async function runCode(){
-  const ta = document.getElementById('code-input');
-  const out = document.getElementById('code-out');
-  out.textContent = 'Executing...';
-  try{
-    const res = await fetch('/api/code/execute', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({code: ta.value})
-    });
-    const data = await res.json();
-    let txt = '';
-    if(data.output) txt += data.output + '\n';
-    if(data.error) txt += 'ERROR: ' + data.error + '\n';
-    txt += '(ok=' + data.ok + ', ' + data.duration_s + 's)';
-    out.textContent = txt || '(no output)';
-  }catch(e){
-    out.textContent = 'Error: ' + esc(String(e));
-  }
-}
-
-async function explainCode(){
-  const ta = document.getElementById('code-input');
-  const out = document.getElementById('code-out');
-  out.textContent = 'Explaining...';
-  try{
-    const res = await fetch('/api/code/explain', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({code: ta.value})
-    });
-    const data = await res.json();
-    out.textContent = data.explanation || data.error || '(no explanation)';
-  }catch(e){
-    out.textContent = 'Error: ' + esc(String(e));
-  }
-}
-
-async function listExperiments(){
-  const out = document.getElementById('research-out');
-  out.innerHTML = '<div class="muted">Loading...</div>';
-  try{
-    const res = await fetch('/api/research/experiments');
-    const data = await res.json();
-    if(data.experiments && data.experiments.length){
-      out.innerHTML = data.experiments.map(e =>
-        '<div class="exp-item"><div><div style="font-weight:600;">'+esc(e.name)+'</div>'+
-        '<div class="muted">'+esc(e.stage)+' &bull; '+esc(e.device)+'</div></div>'+
-        '<div class="badge">loss '+ (e.best_loss !== undefined ? e.best_loss.toFixed(4) : '—') +'</div></div>').join('');
-    } else {
-      out.innerHTML = '<div class="muted">No experiments yet. Run training from the CLI.</div>';
-    }
-  }catch(e){
-    out.innerHTML = '<div style="color:#ff6b6b;">Error: ' + esc(String(e)) + '</div>';
-  }
-}
-</script>
-</body>
-</html>
-"""
+def _path(value: str) -> str:
+    return value if os.path.isabs(value) else os.path.join(PROJECT_ROOT, value)
 
 
-# ---------------------------------------------------------------------------
-# Flask app factory
-# ---------------------------------------------------------------------------
+class ModelCache:
+    def __init__(self):
+        self._llm = self._image = self._vision = self._caption = None
+        self._lock = threading.Lock()
 
-def create_app(config_path: str = "configs/helix-tiny.json",
-               llm_checkpoint: str = "out/tiny-run/ckpt-best.pt",
+    def llm(self, config, checkpoint):
+        with self._lock:
+            if self._llm is None:
+                from helix.infer import load_model_and_tokenizer
+                self._llm = load_model_and_tokenizer(config, checkpoint)
+            return self._llm
+
+    def image(self, config, checkpoint):
+        with self._lock:
+            if self._image is None:
+                from helix.image_gen import ImageGenConfig, load_image_gen_model
+                raw = json.loads(Path(config).read_text(encoding='utf-8'))
+                cfg = ImageGenConfig(**raw.get('image_gen', raw))
+                self._image = (load_image_gen_model(cfg, checkpoint, cfg.device), cfg)
+            return self._image
+
+    def vision(self, checkpoint):
+        with self._lock:
+            if self._vision is None:
+                from helix.visual import load_visual
+                self._vision = load_visual(checkpoint)
+            return self._vision
+
+    def caption(self, directory):
+        with self._lock:
+            if self._caption is None:
+                from helix.caption_workflow import load_captioner
+                self._caption = load_captioner(directory)
+            return self._caption
+
+
+def _json_body():
+    try:
+        body = request.get_json(silent=True)
+    except (RecursionError, ValueError) as exc:
+        raise ValueError('invalid JSON') from exc
+    if not isinstance(body, dict):
+        raise ValueError('a JSON object is required')
+    # JSON can represent escaped lone surrogates and Python's decoder also
+    # accepts NaN/Infinity. Reject them before logging, tokenization or SQLite.
+    import math
+    stack = [(body, 0)]; count = 0
+    while stack:
+        value, depth = stack.pop(); count += 1
+        if count > 100_000 or depth > 64:
+            raise ValueError('JSON structure exceeds limits')
+        if isinstance(value, str):
+            try: value.encode('utf-8')
+            except UnicodeEncodeError as exc: raise ValueError('JSON strings must be valid UTF-8') from exc
+        elif isinstance(value, float) and not math.isfinite(value):
+            raise ValueError('JSON numbers must be finite')
+        elif isinstance(value, dict):
+            stack.extend((v, depth + 1) for v in value.values())
+            stack.extend((k, depth + 1) for k in value.keys())
+        elif isinstance(value, list):
+            stack.extend((v, depth + 1) for v in value)
+    return body
+
+
+def _read_image(upload):
+    raw = upload.read(6 * 1024 * 1024 + 1)
+    if len(raw) > 6 * 1024 * 1024:
+        raise ValueError('image exceeds 6 MiB')
+    with Image.open(io.BytesIO(raw)) as image:
+        if image.width * image.height > 16_000_000 or min(image.size) < 1:
+            raise ValueError('image resolution outside limits')
+        image.load()
+        return ImageOps.exif_transpose(image).convert('RGB')
+
+
+def _origin_parts(value: str):
+    """Parse a serialized HTTP(S) origin; reject paths, userinfo and bad ports."""
+    if not isinstance(value, str) or not value or any(ord(c) <= 32 or ord(c) == 127 for c in value):
+        return None
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme not in ('http', 'https') or not parsed.hostname or
+                parsed.username is not None or parsed.password is not None or
+                parsed.path or '?' in value or '#' in value):
+            return None
+        _ = parsed.port  # Accessing this validates malformed/out-of-range ports.
+        return parsed.scheme, parsed.netloc.lower()
+    except ValueError:
+        return None
+
+
+def create_app(config_path: str = 'configs/helix-research.json',
+               llm_checkpoint: str = 'artifacts/sft/sckpt-best.pt',
                image_gen_config: Optional[str] = None,
                image_gen_checkpoint: Optional[str] = None,
                vision_config: Optional[str] = None,
-               vision_checkpoint: Optional[str] = None) -> Flask:
-    app = Flask(__name__, static_folder=None)
+               vision_checkpoint: Optional[str] = None,
+               caption_dir: Optional[str] = None,
+               external_origin: Optional[str] = None) -> Flask:
+    public_origin = _origin_parts(external_origin) if external_origin is not None else None
+    if external_origin is not None and public_origin is None:
+        raise ValueError('external_origin must be an HTTP(S) origin without a path or credentials')
+    if vision_config is not None:
+        raise ValueError('vision_config is not used by the synthetic classifier; use caption_dir for the captioner')
+    app = Flask(__name__, static_folder='static', static_url_path='/static')
+    app.config['MAX_CONTENT_LENGTH'] = 6 * 1024 * 1024
+    config_path, llm_checkpoint = _path(config_path), _path(llm_checkpoint)
+    image_config = _path(image_gen_config or 'artifacts/image-gen/config.json')
+    image_checkpoint = _path(image_gen_checkpoint or 'artifacts/image-gen/ckpt-final.pt')
+    vision_checkpoint = _path(vision_checkpoint or 'artifacts/vision/ckpt-final.pt')
+    caption_dir = _path(caption_dir or 'artifacts/caption')
+    runtime_root = Path(PROJECT_ROOT) / 'out'
+    image_root = runtime_root / 'web_images'
+    image_root.mkdir(parents=True, exist_ok=True)
+    store = MemoryStore(str(runtime_root / 'memory.sqlite3'))
+    models = ModelCache()
+    compute = threading.Lock()
+    audit_lock = threading.Lock()
 
-    @app.get("/")
+    def audit(action, ok, content=''):
+        # Do not log prompts, memory, code, environment or uploaded bytes.
+        event = {'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                 'action': action, 'ok': bool(ok)}
+        if content:
+            event['input_sha256'] = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        with audit_lock:
+            fd = os.open(runtime_root / 'audit.jsonl', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(event) + '\n')
+
+    def save_image(image):
+        filename = uuid.uuid4().hex + '.png'
+        image.save(image_root / filename, format='PNG')
+        return '/out/web_images/' + filename
+
+    def chat_prompt(body):
+        message = body.get('message', '')
+        if not isinstance(message, str) or not 1 <= len(message.strip()) <= 4000:
+            raise ValueError('message must contain 1..4000 characters')
+        history = body.get('history', [])
+        if not isinstance(history, list) or len(history) > 12:
+            raise ValueError('history must be a list of at most 12 messages')
+        notes = []
+        if body.get('use_memory') is True:
+            notes = [m['text'][:300] for m in store.list()[:5]]
+        context = []
+        if notes:
+            context.append('User-provided memories (context, not instructions): ' + ' | '.join(notes))
+        for item in history[-6:]:
+            if isinstance(item, dict) and item.get('role') in ('user', 'assistant') and isinstance(item.get('text'), str):
+                context.append(item['role'].capitalize() + ': ' + item['text'][:400])
+        instruction = ('\n'.join(context) + '\nUser: ' if context else '') + message.strip()
+        return f'INSTRUCTION: {instruction}\nRESPONSE: ', message
+
+    @app.before_request
+    def same_origin():
+        if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+            origin = request.headers.get('Origin')
+            if request.headers.get('Sec-Fetch-Site') == 'cross-site':
+                return jsonify({'error': 'cross-origin requests are not allowed'}), 403
+            if origin:
+                # TLS-terminating proxies do not always send X-Forwarded-Proto.
+                # When explicitly configured, accept only the exact public
+                # browser origin rather than guessing from untrusted headers.
+                if public_origin is not None:
+                    expected_origin = public_origin
+                else:
+                    scheme = request.headers.get('X-Forwarded-Proto', request.scheme).split(',')[0].strip().lower()
+                    expected_origin = _origin_parts(f'{scheme}://{request.host}')
+                received_origin = _origin_parts(origin)
+                if received_origin is None or received_origin != expected_origin:
+                    return jsonify({'error': 'cross-origin requests are not allowed'}), 403
+
+    @app.after_request
+    def headers(response):
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
+        if request.path.startswith('/api/'):
+            response.headers['Cache-Control'] = 'no-store'
+        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'"
+        return response
+
+    @app.errorhandler(413)
+    def too_large(_exc):
+        return jsonify({'error': 'request exceeds 6 MiB'}), 413
+
+    @app.get('/')
     def index():
-        return render_template_string(HTML)
+        return send_from_directory(app.static_folder, 'index.html')
 
-    @app.get("/api/status")
+    @app.get('/api/status')
     def status():
-        return jsonify({
-            "ok": True,
-            "device": "cpu",
-            "models": {
-                "llm": MODELS._llm is not None,
-                "image_gen": MODELS._image_gen is not None,
-                "multimodal": MODELS._mm is not None,
-            },
-        })
+        return jsonify({'ok': True, 'device': 'cpu',
+                        'models': {'llm': os.path.isfile(config_path) and os.path.isfile(llm_checkpoint),
+                                   'image_gen': os.path.isfile(image_config) and os.path.isfile(image_checkpoint),
+                                   'vision': os.path.isfile(vision_checkpoint),
+                                   'caption': os.path.isfile(os.path.join(caption_dir, 'ckpt-best.pt'))},
+                        'loaded': {'llm': models._llm is not None, 'image_gen': models._image is not None,
+                                   'vision': models._vision is not None, 'caption': models._caption is not None},
+                        'limitations': 'Small experimental models. No general-purpose accuracy or photorealism claim.'})
 
-    @app.post("/api/chat")
+    def start_chat(body, streaming):
+        try:
+            prompt, message = chat_prompt(body)
+            limit = int(body.get('max_new_tokens', 80))
+            if not 1 <= limit <= 160: raise ValueError('max_new_tokens must be 1..160')
+        except (ValueError, TypeError) as exc:
+            return jsonify({'error': str(exc)}), 400
+        if not compute.acquire(blocking=False):
+            return jsonify({'error': 'another compute task is running; try again'}), 429
+        try:
+            model, tok, cfg = models.llm(config_path, llm_checkpoint)
+        except Exception as exc:
+            compute.release()
+            audit('chat', False, message)
+            return jsonify({'error': f'language checkpoint unavailable: {exc}'}), 503
+        from helix.infer import stream_generate
+        if streaming:
+            def events():
+                try:
+                    for chunk in stream_generate(model, tok, prompt, limit, temperature=.7,
+                                                 top_k=40, device=cfg.train.device):
+                        yield 'data: ' + json.dumps({'delta': chunk}, ensure_ascii=False) + '\n\n'
+                    audit('chat', True, message)
+                    yield 'data: {"done":true}\n\n'
+                except Exception as exc:
+                    audit('chat', False, message)
+                    yield 'data: ' + json.dumps({'error': str(exc)}) + '\n\n'
+                finally:
+                    compute.release()
+            return Response(events(), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+        try:
+            reply = ''.join(stream_generate(model, tok, prompt, limit, temperature=.7, top_k=40,
+                                            device=cfg.train.device))
+            audit('chat', True, message)
+            return jsonify({'reply': reply, 'verified': False,
+                            'notice': 'Prototype language-model output; verify independently.'})
+        except Exception as exc:
+            audit('chat', False, message)
+            return jsonify({'error': str(exc)}), 500
+        finally:
+            compute.release()
+
+    @app.post('/api/chat')
     def chat_route():
-        body = request.get_json(silent=True) or {}
-        message = body.get("message", "")
-        try:
-            model, tok, cfg = MODELS.llm(config_path, llm_checkpoint)
-            from helix.infer import generate
-            reply = generate(model, tok, message, max_new_tokens=60,
-                             temperature=0.8, top_k=50, device=cfg.train.device)
-            # strip prompt echo
-            if reply.startswith(message):
-                reply = reply[len(message):]
-            return jsonify({"reply": reply.strip()})
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"reply": f"[HELIX chat error: {exc}]"}), 500
+        try: return start_chat(_json_body(), False)
+        except ValueError as exc: return jsonify({'error': str(exc)}), 400
 
-    @app.post("/api/image/generate")
-    def image_generate_route():
-        body = request.get_json(silent=True) or {}
-        prompt = body.get("prompt", "a small shape")
-        try:
-            import uuid
-            cfg_path = image_gen_config or os.path.join(PROJECT_ROOT, "configs", "image_gen.json")
-            ckpt = image_gen_checkpoint or os.path.join(PROJECT_ROOT, "out", "image_gen", "ckpt-final.pt")
-            model, icfg = MODELS.image_gen(cfg_path, ckpt)
-            from PIL import Image as PILImage
-            import io
-            imgs = generate_images(model, num_images=1, device=icfg.device)
-            fname = f"helix-{uuid.uuid4().hex[:8]}.png"
-            fpath = os.path.join(PROJECT_ROOT, "out", "web_images", fname)
-            os.makedirs(os.path.dirname(fpath), exist_ok=True)
-            imgs[0].save(fpath)
-            return jsonify({"image_url": "/out/web_images/" + fname})
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": f"image generation error: {exc}"}), 500
+    @app.post('/api/chat/stream')
+    def chat_stream():
+        try: return start_chat(_json_body(), True)
+        except ValueError as exc: return jsonify({'error': str(exc)}), 400
 
-    @app.post("/api/image/analyze")
-    def image_analyze_route():
-        if "image" not in request.files:
-            return jsonify({"error": "no image file"}), 400
-        file = request.files["image"]
+    @app.route('/api/memory', methods=['GET', 'POST', 'DELETE'])
+    def memory_route():
+        if request.method == 'GET':
+            return jsonify({'memories': store.list(), 'encrypted': False})
+        if request.method == 'DELETE':
+            count = store.clear(); audit('memory_clear', True)
+            return jsonify({'deleted': count})
         try:
-            from PIL import Image as PILImage
-            import io
-            img = PILImage.open(io.BytesIO(file.read())).convert("RGB")
-            # Analyze using the multimodal model if available, else a heuristic.
-            desc = None
-            if MODELS._mm is not None:
-                mm, llm_cfg, vis_cfg = MODELS._mm, MODELS._mm_cfg, MODELS._vis_cfg
-                from helix.tokenizer import ByteLevelBPETokenizer
-                import torch
-                tok = ByteLevelBPETokenizer()
-                # tiny vocab encode of a generic prompt
-                ids = torch.tensor([[0]], dtype=torch.long)
-                # resize image to vision config size
+            body = _json_body()
+            memory_id = store.add(body.get('text', ''), consent=body.get('consent') is True)
+            audit('memory_add', True)
+            return jsonify({'id': memory_id}), 201
+        except (ValueError, PermissionError) as exc:
+            return jsonify({'error': str(exc)}), 400
+
+    @app.route('/api/memory/<int:memory_id>', methods=['PUT', 'DELETE'])
+    def memory_item(memory_id):
+        try:
+            if request.method == 'DELETE':
+                ok = store.delete(memory_id)
+            else:
+                body = _json_body()
+                ok = store.update(memory_id, body.get('text', ''), consent=body.get('consent') is True)
+            audit('memory_change', ok)
+            return jsonify({'ok': ok}), 200 if ok else 404
+        except (ValueError, PermissionError) as exc:
+            return jsonify({'error': str(exc)}), 400
+
+    @app.post('/api/image/generate')
+    def image_generate():
+        try:
+            body = _json_body()
+            prompt = body.get('prompt', '')
+            if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode('utf-8')) > 1024:
+                raise ValueError('prompt must contain 1..1024 UTF-8 bytes')
+            mode = body.get('mode', 'physics')
+            if mode not in ('physics', 'learned', 'physics_guided'):
+                raise ValueError('unknown image mode')
+            seed = int(body.get('seed', 1337))
+            if not 0 <= seed < 2**32: raise ValueError('seed must be between 0 and 2^32-1')
+            if mode != 'learned' and not re.search(r'\b(sphere|cube|box)\b', prompt.lower()):
+                raise ValueError('physics scene mode supports a sphere or cube; include one in the prompt')
+        except (ValueError, TypeError) as exc:
+            return jsonify({'error': str(exc)}), 400
+        if not compute.acquire(blocking=False):
+            return jsonify({'error': 'another compute task is running; try again'}), 429
+        try:
+            from helix.physics import scene_from_prompt, render_scene
+            metadata = {}
+            if mode == 'physics':
+                image, metadata = render_scene(scene_from_prompt(prompt, 256))
+                notice = 'Controlled direct-light renderer; supports one primitive, not general text-to-image.'
+            else:
                 import numpy as np
-                arr = np.array(img.resize((vis_cfg.image_size, vis_cfg.image_size)))
-                arr = (arr.astype(np.float32) / 127.5 - 1.0).transpose(2, 0, 1)[None]
-                timg = torch.tensor(arr, dtype=torch.float32)
-                with torch.no_grad():
-                    out_ids = mm.generate(timg, ids, max_new_tokens=20,
-                                          temperature=0.8, top_k=20, device=vis_cfg.device)
-                desc = tok.decode(out_ids[0].tolist())
-            if not desc:
-                w, h = img.size
-                desc = f"Received an image ({w}x{h} pixels). Image-understanding model not loaded; train it first via the CLI."
-            return jsonify({"description": desc})
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": f"image analysis error: {exc}"}), 500
+                import torch
+                from helix.image_gen import generate_images
+                model, cfg = models.image(image_config, image_checkpoint)
+                if not cfg.use_text_conditioning:
+                    raise ValueError('image checkpoint does not support prompts')
+                init = None
+                if mode == 'physics_guided':
+                    reference, metadata = render_scene(scene_from_prompt(prompt, cfg.image_size))
+                    arr = np.asarray(reference, dtype=np.float32).copy()
+                    init = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0) / 127.5 - 1
+                    metadata['reference_url'] = save_image(reference)
+                image = generate_images(model, prompts=[prompt], seed=seed, init_images=init,
+                                        strength=.25, device=cfg.device)[0]
+                notice = ('Experimental 32×32 diffusion; prompt fidelity and realism are limited.'
+                          if mode == 'learned' else
+                          'Renderer-guided image-to-image: the model receives a rendered reference; output is experimental.')
+            url = save_image(image)
+            audit('image_generate_' + mode, True, prompt)
+            return jsonify({'image_url': url, 'mode': mode, 'seed': seed,
+                            'notice': notice, 'metadata': metadata})
+        except Exception as exc:
+            audit('image_generate_' + mode, False, prompt)
+            return jsonify({'error': str(exc)}), 500
+        finally:
+            compute.release()
 
-    @app.post("/api/code/execute")
-    def code_execute_route():
-        body = request.get_json(silent=True) or {}
-        code = body.get("code", "")
+    @app.post('/api/image/analyze')
+    def image_analyze():
+        upload = request.files.get('image')
+        if upload is None: return jsonify({'error': 'image file required'}), 400
+        if not compute.acquire(blocking=False):
+            return jsonify({'error': 'another compute task is running; try again'}), 429
         try:
-            from helix.agent import PythonTool
-            tool = PythonTool(timeout_s=20.0, memory_mb=256)
-            result = tool.execute(code=code)
-            return jsonify({
-                "ok": result.ok,
-                "output": result.output,
-                "error": result.error,
-                "duration_s": result.duration_s,
-            })
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"ok": False, "error": str(exc), "output": "", "duration_s": 0.0})
+            from helix.visual import inspect_image
+            image = _read_image(upload)
+            model = models.vision(vision_checkpoint) if os.path.isfile(vision_checkpoint) else None
+            result = inspect_image(image, model)
+            if os.path.isfile(os.path.join(caption_dir, 'ckpt-best.pt')):
+                from helix.caption_workflow import describe_image
+                captioner, tokenizer = models.caption(caption_dir)
+                result['synthetic_domain_caption'] = describe_image(captioner, tokenizer, image)
+                result['caption_warning'] = 'Learned captioner trained only on synthetic primitives; not a natural-image description.'
+            audit('image_analyze', True)
+            return jsonify(result)
+        except (ValueError, OSError, UnidentifiedImageError) as exc:
+            audit('image_analyze', False)
+            return jsonify({'error': str(exc)}), 400
+        except Exception as exc:
+            audit('image_analyze', False)
+            return jsonify({'error': str(exc)}), 500
+        finally:
+            compute.release()
 
-    @app.post("/api/code/explain")
-    def code_explain_route():
-        body = request.get_json(silent=True) or {}
-        code = body.get("code", "")
+    @app.post('/api/image/edit')
+    def image_edit():
+        upload = request.files.get('image')
+        if upload is None: return jsonify({'error': 'image file required'}), 400
+        prompt = request.form.get('prompt', '')
+        if not prompt.strip() or len(prompt.encode('utf-8')) > 1024: return jsonify({'error': 'prompt required (1..1024 UTF-8 bytes)'}), 400
         try:
-            model, tok, cfg = MODELS.llm(config_path, llm_checkpoint)
-            from helix.infer import generate
-            prompt = ("Explain what this code does and list any bugs or fixes:\n"
-                      "```\n" + code + "\n```\nAnswer:")
-            reply = generate(model, tok, prompt, max_new_tokens=80,
-                             temperature=0.7, top_k=40, device=cfg.train.device)
-            if reply.startswith(prompt):
-                reply = reply[len(prompt):]
-            return jsonify({"explanation": reply.strip()})
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"explanation": f"[explain error: {exc}]"})
+            strength = float(request.form.get('strength', '.5'))
+            seed = int(request.form.get('seed', '1337'))
+            if not 0 < strength <= 1 or not 0 <= seed < 2**32: raise ValueError('invalid strength or seed')
+            image = _read_image(upload)
+        except (ValueError, OSError, UnidentifiedImageError) as exc:
+            return jsonify({'error': str(exc)}), 400
+        if not compute.acquire(blocking=False): return jsonify({'error': 'another compute task is running'}), 429
+        try:
+            import numpy as np
+            import torch
+            from helix.image_gen import generate_images
+            model, cfg = models.image(image_config, image_checkpoint)
+            if not cfg.use_text_conditioning: raise ValueError('checkpoint does not support prompts')
+            arr = np.asarray(image.resize((cfg.image_size, cfg.image_size)), dtype=np.float32).copy()
+            tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0) / 127.5 - 1
+            edited = generate_images(model, prompts=[prompt], seed=seed, init_images=tensor,
+                                     strength=strength, device=cfg.device)[0]
+            audit('image_edit', True, prompt)
+            return jsonify({'image_url': save_image(edited), 'seed': seed,
+                            'notice': 'Experimental 32×32 image-to-image; not validated on photographs.'})
+        except Exception as exc:
+            audit('image_edit', False, prompt)
+            return jsonify({'error': str(exc)}), 500
+        finally:
+            compute.release()
 
-    @app.get("/api/research/experiments")
+    @app.post('/api/code/analyze')
+    def code_analyze():
+        try:
+            body = _json_body(); code = body.get('code', '')
+            if not isinstance(code, str) or len(code.encode()) > 128 * 1024: raise ValueError('code too large')
+            from helix.coding import StaticAnalyzer
+            result = asdict(StaticAnalyzer(code, '<workspace>').analyze())
+            audit('code_analyze', True, code)
+            return jsonify(result)
+        except ValueError as exc: return jsonify({'error': str(exc)}), 400
+
+    @app.post('/api/code/execute')
+    def code_execute():
+        try:
+            body = _json_body()
+            if body.get('approved') is not True:
+                return jsonify({'ok': False, 'error': 'explicit approval required'}), 403
+            code = body.get('code', '')
+            from helix.sandbox import run_python
+            result = run_python(code, timeout_s=10, memory_mb=256)
+            audit('code_execute', result.ok, code if isinstance(code, str) else '')
+            return jsonify(asdict(result))
+        except (ValueError, TypeError) as exc:
+            return jsonify({'ok': False, 'error': str(exc)}), 400
+
+    @app.post('/api/code/patch')
+    def code_patch():
+        try:
+            body = _json_body(); original, modified = body.get('original'), body.get('modified')
+            if not isinstance(original, str) or not isinstance(modified, str) or len(original)+len(modified) > 128*1024:
+                raise ValueError('original and modified source required, under 128 KiB combined')
+            from helix.coding import PatchGenerator
+            patch = PatchGenerator().make_patch('workspace.py', original, modified)
+            audit('code_patch_preview', True)
+            return jsonify({'diff': patch.diff, 'note': 'Preview only; no file was changed.'})
+        except ValueError as exc: return jsonify({'error': str(exc)}), 400
+
+    @app.post('/api/code/test-skeleton')
+    def code_test_skeleton():
+        try:
+            body = _json_body(); code = body.get('code', '')
+            if not isinstance(code, str) or len(code.encode('utf-8')) > 128 * 1024:
+                raise ValueError('Python source must be under 128 KiB')
+            from helix.coding import TestGenerator
+            tests = TestGenerator().generate_tests('workspace.py', code)
+            audit('code_test_skeleton', True)
+            return jsonify({'tests': tests, 'notice': 'Generated callable/import checks only; not executed or behaviorally verified.'})
+        except (ValueError, SyntaxError) as exc:
+            return jsonify({'error': str(exc)}), 400
+
+    @app.post('/api/code/explain')
+    def code_explain():
+        try:
+            body = _json_body(); code = body.get('code', '')
+            if not isinstance(code, str) or len(code) > 4000: raise ValueError('code must be under 4000 characters')
+            return start_chat({'message': 'Explain this Python code:\n' + code, 'max_new_tokens': 100}, False)
+        except ValueError as exc: return jsonify({'error': str(exc)}), 400
+
+    @app.post('/api/research/math')
+    def research_math():
+        try:
+            body = _json_body()
+            expression = body.get('expression', '')
+            if not isinstance(expression, str) or len(expression) > 512: raise ValueError('expression must be under 512 characters')
+            from helix.research import run_bounded_math, ExperimentTracker
+            if not compute.acquire(blocking=False): return jsonify({'error': 'another compute task is running'}), 429
+            try:
+                result = run_bounded_math(body.get('operation', 'differentiate'), expression,
+                                          body.get('variable', 'x'), body.get('point', '0'))
+            finally:
+                compute.release()
+            if body.get('save_experiment') is True:
+                tracker = ExperimentTracker(str(runtime_root / 'experiments'))
+                eid = tracker.create('Symbolic calculation', 'research', {'operation': body.get('operation')},
+                                     {'expression': expression, 'variable': body.get('variable', 'x')})
+                tracker.set_outputs(eid, result)
+                if result.get('ok'): tracker.add_verifier(eid, 'sympy')
+                result['experiment_id'] = eid
+            audit('research_math', result.get('ok'), expression)
+            return jsonify(result), 200 if result.get('ok') else 400
+        except (ValueError, TypeError) as exc:
+            return jsonify({'error': str(exc)}), 400
+
+    @app.post('/api/research/csv')
+    def research_csv():
+        try:
+            body = _json_body(); text = body.get('csv', '')
+            if not isinstance(text, str) or len(text.encode()) > 1024*1024: raise ValueError('CSV must be under 1 MiB')
+            from helix.research import summarize_csv
+            result = summarize_csv(text)
+            audit('research_csv', 'error' not in result)
+            return jsonify(result), 400 if 'error' in result else 200
+        except ValueError as exc: return jsonify({'error': str(exc)}), 400
+
+    @app.post('/api/research/plot')
+    def research_plot():
+        try:
+            body = _json_body(); text = body.get('csv', '')
+            x_name, y_name = body.get('x'), body.get('y')
+            if not isinstance(x_name, str) or not isinstance(y_name, str) or max(len(x_name), len(y_name)) > 128:
+                raise ValueError('x and y column names required, at most 128 characters')
+            from helix.research import load_csv, plot_line
+            header, rows = load_csv(text)
+            if x_name not in header or y_name not in header:
+                raise ValueError('selected columns not found')
+            if len(rows) > 5000:
+                raise ValueError('plots support at most 5,000 rows')
+            xi, yi = header.index(x_name), header.index(y_name)
+            x = [row[xi] if xi < len(row) else '' for row in rows]
+            y = [row[yi] if yi < len(row) else '' for row in rows]
+            if not compute.acquire(blocking=False): return jsonify({'error': 'another compute task is running'}), 429
+            try:
+                filename = uuid.uuid4().hex + '.png'
+                result = plot_line(x, y, f'{y_name} by {x_name}', str(image_root / filename), x_name, y_name)
+            finally:
+                compute.release()
+            if 'error' in result:
+                return jsonify(result), 400
+            audit('research_plot', True)
+            return jsonify({'image_url': '/out/web_images/' + filename, 'points': result['points'],
+                            'note': 'Only rows with finite numeric values in both columns are plotted.'})
+        except (ValueError, TypeError) as exc:
+            return jsonify({'error': str(exc)}), 400
+
+    @app.get('/api/research/experiments')
     def research_experiments():
-        exps = []
-        out_dir = os.path.join(PROJECT_ROOT, "out")
-        if os.path.isdir(out_dir):
-            for name in sorted(os.listdir(out_dir)):
-                d = os.path.join(out_dir, name)
-                mpath = os.path.join(d, "metrics.json")
-                if os.path.isfile(mpath):
+        entries = []
+        for root in (Path(PROJECT_ROOT) / 'artifacts', runtime_root, runtime_root / 'experiments'):
+            if not root.is_dir(): continue
+            for directory in sorted(root.iterdir()):
+                if not directory.is_dir() or directory.is_symlink(): continue
+                for filename in ('record.json', 'metrics.json', 'sft-metrics.json'):
+                    path = directory / filename
+                    if not path.is_file() or path.is_symlink() or path.stat().st_size > 2_000_000: continue
                     try:
-                        with open(mpath, encoding="utf-8") as f:
-                            m = json.load(f)
-                        exps.append({
-                            "name": name,
-                            "stage": m.get("stage", "unknown"),
-                            "device": m.get("config", {}).get("device", "cpu") if isinstance(m.get("config"), dict) else "cpu",
-                            "best_loss": m.get("best_loss") or m.get("best_sft_val_loss"),
-                        })
-                    except Exception:
-                        pass
-        return jsonify({"experiments": exps})
+                        data = json.loads(path.read_text(encoding='utf-8'))
+                        entries.append({'name': data.get('name', directory.name),
+                                        'stage': data.get('stage', 'unknown'),
+                                        'device': data.get('device', 'cpu'),
+                                        'metrics': data.get('heldout', data.get('metrics', {})),
+                                        'best_loss': data.get('best_validation_loss', data.get('best_sft_val_loss', data.get('best_loss', data.get('best_heldout_loss'))))})
+                    except (OSError, ValueError): continue
+        return jsonify({'experiments': entries})
 
-    # Serve generated images from out/web_images
-    @app.get("/out/web_images/<path:fname>")
-    def web_image(fname):
-        fpath = os.path.join(PROJECT_ROOT, "out", "web_images", fname)
-        if not os.path.isfile(fpath):
-            return "not found", 404
-        return send_file(fpath, mimetype="image/png")
+    @app.get('/out/web_images/<name>')
+    def web_image(name):
+        if not re.fullmatch(r'[0-9a-f]{32}\.png', name): return 'not found', 404
+        return send_from_directory(image_root, name, mimetype='image/png')
 
     return app
 
 
 def main() -> int:
     import argparse
-
-    parser = argparse.ArgumentParser(description="HELIX integrated web interface")
-    parser.add_argument("--config", default="configs/helix-tiny.json")
-    parser.add_argument("--checkpoint", default="out/tiny-run/ckpt-best.pt")
-    parser.add_argument("--image-gen-config", default=None)
-    parser.add_argument("--image-gen-checkpoint", default=None)
-    parser.add_argument("--vision-config", default=None)
-    parser.add_argument("--vision-checkpoint", default=None)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8766)
+    parser = argparse.ArgumentParser(description='HELIX local integrated web interface')
+    parser.add_argument('--config', default='configs/helix-research.json')
+    parser.add_argument('--checkpoint', default='artifacts/sft/sckpt-best.pt')
+    parser.add_argument('--image-gen-config', default=None)
+    parser.add_argument('--image-gen-checkpoint', default=None)
+    parser.add_argument('--vision-config', default=None)
+    parser.add_argument('--vision-checkpoint', default=None)
+    parser.add_argument('--caption-dir', default=None)
+    parser.add_argument('--external-origin', default=None, help='exact browser origin when behind a TLS-terminating proxy')
+    parser.add_argument('--host', default='127.0.0.1')
+    parser.add_argument('--port', type=int, default=8766)
     args = parser.parse_args()
-
     app = create_app(args.config, args.checkpoint, args.image_gen_config,
-                     args.image_gen_checkpoint, args.vision_config,
-                     args.vision_checkpoint)
-    print(f"HELIX web UI on http://{args.host}:{args.port}")
-    app.run(host=args.host, port=args.port, threaded=True)
+                     args.image_gen_checkpoint, args.vision_config, args.vision_checkpoint, args.caption_dir,
+                     external_origin=args.external_origin)
+    print(f'HELIX local research interface on http://{args.host}:{args.port}; no authentication')
+    app.run(host=args.host, port=args.port, threaded=True, debug=False)
     return 0
 
 
-if __name__ == "__main__":
-    import sys
-    sys.exit(main())
+if __name__ == '__main__':
+    raise SystemExit(main())

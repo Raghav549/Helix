@@ -1,12 +1,194 @@
 [
-  ["Answer: Hello, how are you today?", "I am doing well, thank you for asking."],
-  ["Answer: Can you explain recursion in simple terms?", "Recursion is when a function calls itself to solve a smaller version of the same problem."],
-  ["What is photosynthesis?", "Photosynthesis is the process by which green plants convert sunlight into chemical energy."],
-  ["What does chlorophyll do?", "Chlorophyll captures photons and drives the electron transport chain in the thylakoid membrane."],
-  ["What is the Pythagorean theorem?", "In a right triangle, a squared plus b squared equals c squared."],
-  ["What is a prime number?", "A prime number is a natural number greater than one that has no positive divisors other than one and itself."],
-  ["Write a factorial function in Python.", "def factorial(n):\\n    if n <= 1:\\n        return 1\\n    return n * factorial(n - 1)"],
-  ["Write a fibonacci function in Python.", "def fibonacci(n):\\n    a, b = 0, 1\\n    for _ in range(n):\\n        a, b = b, a + b\\n    return a"],
-  ["What is gravity according to general relativity?", "Gravity is the curvature of spacetime caused by mass and energy."],
-  ["I think, therefore I am.", "This is Descartes' statement that the act of thinking proves one's own existence."]
+  [
+    "Hello!",
+    "Hello! What would you like to work on?"
+  ],
+  [
+    "Hi, how are you?",
+    "I am ready to help. What is on your mind?"
+  ],
+  [
+    "Thanks for your help.",
+    "You are welcome."
+  ],
+  [
+    "Please explain recursion simply.",
+    "Recursion solves a problem by calling a function on a smaller version of that problem, stopping at a base case."
+  ],
+  [
+    "What is an algorithm?",
+    "An algorithm is a finite sequence of steps for solving a problem."
+  ],
+  [
+    "What is a prime number?",
+    "A prime number is an integer greater than one with exactly two positive divisors: one and itself."
+  ],
+  [
+    "What is a derivative?",
+    "A derivative describes the instantaneous rate of change of a function."
+  ],
+  [
+    "What is the Pythagorean theorem?",
+    "For a right triangle with legs a and b and hypotenuse c, a squared plus b squared equals c squared."
+  ],
+  [
+    "How can I check a mathematical claim?",
+    "State the assumptions, derive the result, and check it with an independent calculation or proof."
+  ],
+  [
+    "What is a hypothesis?",
+    "A hypothesis is a proposed explanation or prediction that can be tested against evidence."
+  ],
+  [
+    "What is a controlled experiment?",
+    "It compares conditions while keeping other relevant variables as consistent as possible."
+  ],
+  [
+    "Why does correlation not prove causation?",
+    "An association can arise from confounding, reverse causation, chance, or a direct causal effect."
+  ],
+  [
+    "What does a confidence interval mean?",
+    "It is an interval produced by a procedure designed to cover the true parameter at a specified long-run rate."
+  ],
+  [
+    "Explain photosynthesis.",
+    "Plants use light energy to convert carbon dioxide and water into sugars, releasing oxygen."
+  ],
+  [
+    "What is DNA?",
+    "DNA is a molecule that stores genetic information in the sequence of its bases."
+  ],
+  [
+    "What is an atom?",
+    "An atom contains a nucleus of protons and neutrons surrounded by electrons."
+  ],
+  [
+    "What is a computer program?",
+    "A program is a set of instructions that a computer can execute."
+  ],
+  [
+    "What does a compiler do?",
+    "A compiler translates a program into another representation, often machine code, and reports errors."
+  ],
+  [
+    "How do I debug code?",
+    "Reproduce the failure, inspect the error and inputs, isolate the cause, and add a test for the fix."
+  ],
+  [
+    "Why write tests?",
+    "Tests check specific expected behavior and help detect regressions when code changes."
+  ],
+  [
+    "What is a database index?",
+    "An index is an auxiliary data structure that can accelerate certain queries at a storage and update cost."
+  ],
+  [
+    "Explain a hash function.",
+    "A hash function maps data to a fixed-size value. Collisions are possible."
+  ],
+  [
+    "What is an API?",
+    "An API is a defined interface that lets software components communicate."
+  ],
+  [
+    "What if you are unsure?",
+    "I should say what I do not know, describe uncertainty, and suggest a way to verify the answer."
+  ],
+  [
+    "Can you diagnose my illness?",
+    "I cannot diagnose you. A qualified clinician can assess symptoms; urgent symptoms need urgent care."
+  ],
+  [
+    "Are historical interpretations always settled?",
+    "No. Interpretations can differ; compare sources, evidence, context, and competing explanations."
+  ],
+  [
+    "How should a researcher cite sources?",
+    "Record the original source, version, author, date, and relevant location, and distinguish evidence from interpretation."
+  ],
+  [
+    "What is a language model?",
+    "A language model assigns probabilities to sequences of tokens and can generate text by predicting continuations."
+  ],
+  [
+    "What is a neural network?",
+    "A neural network is a parameterized function whose weights can be learned from examples."
+  ],
+  [
+    "How does gradient descent work?",
+    "It adjusts parameters in a direction that locally reduces a loss using its gradient."
+  ],
+  [
+    "What is overfitting?",
+    "Overfitting happens when a model learns training-specific patterns that do not generalize well to new data."
+  ],
+  [
+    "What is a validation set?",
+    "A validation set is held apart from training so that model choices can be assessed on unseen examples."
+  ],
+  [
+    "नमस्ते, आप कैसे हैं?",
+    "नमस्ते! मैं आपकी सहायता के लिए तैयार हूँ।"
+  ],
+  [
+    "गणित क्या है?",
+    "गणित संख्या, आकार, संरचना और परिवर्तन का अध्ययन है।"
+  ],
+  [
+    "Hola, ¿cómo estás?",
+    "Hola, estoy listo para ayudarte."
+  ],
+  [
+    "¿Qué es una hipótesis?",
+    "Una hipótesis es una explicación o predicción que se puede poner a prueba."
+  ],
+  [
+    "Write a Python function that adds two numbers.",
+    "def add(a, b):\n    return a + b"
+  ],
+  [
+    "Write a Python function that squares a number.",
+    "def square(x):\n    return x * x"
+  ],
+  [
+    "What is two plus three?",
+    "Two plus three is five."
+  ],
+  [
+    "Can you see an image from text alone?",
+    "No. Image understanding requires a visual input and an appropriate vision model or tool."
+  ],
+  [
+    "What is the difference between a fact and an opinion?",
+    "A fact is a claim that can be checked against evidence; an opinion expresses a judgment or preference."
+  ],
+  [
+    "How can I compare two models fairly?",
+    "Use the same data split and evaluation, report resource budgets, and repeat with multiple seeds."
+  ],
+  [
+    "What is prompt injection?",
+    "It is untrusted content trying to redirect an assistant or obtain permissions it was not granted."
+  ],
+  [
+    "What should a code agent do before editing files?",
+    "Inspect the task, propose a bounded change, and obtain approval for consequential actions."
+  ],
+  [
+    "Can a small model guarantee accurate answers?",
+    "No. Check important answers against reliable sources or independent tools."
+  ],
+  [
+    "Explain a feedback loop.",
+    "A feedback loop occurs when a system output influences a later input to that system."
+  ],
+  [
+    "What is an operating system?",
+    "An operating system manages hardware resources and provides services to programs."
+  ],
+  [
+    "What is a probability?",
+    "A probability is a number from zero to one representing how likely an event is under a stated model."
+  ]
 ]

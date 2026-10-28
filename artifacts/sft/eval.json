@@ -1,0 +1,122 @@
+{
+  "model": "configs/helix-research.json",
+  "checkpoint": "artifacts/sft/sckpt-best.pt",
+  "device": "cpu",
+  "total": 5,
+  "passed": 1,
+  "pass_rate": 0.2,
+  "results": [
+    {
+      "task": "arithmetic_addition",
+      "category": "reasoning",
+      "metric": "accuracy",
+      "value": 0.0,
+      "threshold": 0.5,
+      "pass_": false,
+      "details": {
+        "correct": 0,
+        "total": 20,
+        "examples": [
+          {
+            "a": 49,
+            "b": 97,
+            "expected": "146",
+            "completion": "128<|endoftext|>To evalu",
+            "ok": false
+          },
+          {
+            "a": 53,
+            "b": 5,
+            "expected": "58",
+            "completion": "124 - 12*",
+            "ok": false
+          },
+          {
+            "a": 33,
+            "b": 65,
+            "expected": "98",
+            "completion": "24 - 12*co",
+            "ok": false
+          },
+          {
+            "a": 62,
+            "b": 51,
+            "expected": "113",
+            "completion": "12* - 1.0",
+            "ok": false
+          },
+          {
+            "a": 38,
+            "b": 61,
+            "expected": "99",
+            "completion": "124444 b",
+            "ok": false
+          }
+        ],
+        "elapsed_s": 0.228
+      }
+    },
+    {
+      "task": "code_completion_is_even",
+      "category": "code_execution",
+      "metric": "isolated_test_pass",
+      "value": 0.0,
+      "threshold": 1.0,
+      "pass_": false,
+      "details": {
+        "completion": "minilities = nn.co",
+        "execution_error": "Traceback (most recent call last):\n  File \"/work/runner.py\", line 3, in <module>\n    compiled = compile(source.read(), '/work/main.py', 'exec')\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/main.py\", line 2\n    return minilities = nn.co\n                      ^\nSyntaxError: invalid syntax",
+        "elapsed_s": 0.092
+      }
+    },
+    {
+      "task": "sentence_completion_capital",
+      "category": "memorisation",
+      "metric": "accuracy",
+      "value": 0.0,
+      "threshold": 1.0,
+      "pass_": false,
+      "details": {
+        "completion": "ion is a fi",
+        "elapsed_s": 0.011
+      }
+    },
+    {
+      "task": "long_context_recall",
+      "category": "long_context",
+      "metric": "accuracy",
+      "value": 0.0,
+      "threshold": 1.0,
+      "pass_": false,
+      "details": {
+        "completion": "\nand is a filities of a ",
+        "context_tokens": 900,
+        "context_limit": 128,
+        "needle_within_window": false,
+        "elapsed_s": 0.04
+      }
+    },
+    {
+      "task": "calibration_true_vs_false",
+      "category": "calibration",
+      "metric": "true_loss_less_than_false_loss",
+      "value": 1.0,
+      "threshold": 1.0,
+      "pass_": true,
+      "details": {
+        "true_loss": 5.0144,
+        "false_loss": 5.1188,
+        "elapsed_s": 0.003
+      }
+    }
+  ],
+  "validation": {
+    "loss": 3.4640440146128335,
+    "perplexity": 31.945905351971174,
+    "batches": 30,
+    "batch_size": 8,
+    "block_size": 128,
+    "seed": 1337,
+    "note": "sampled held-out token windows; not a general capability benchmark"
+  }
+}

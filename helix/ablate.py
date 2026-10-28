@@ -1,7 +1,7 @@
 """HELIX architecture ablation runner.
 
 Trains several small models from random initialization on the SAME corpus
-with the SAME compute budget, differing only in block type
+with the SAME token budget, differing in block type (compute differs)
 (transformer / linear_attn / recurrent / hybrid). Reports validation loss,
 training throughput, and quality per second for each variant so the next
 architecture investment is based on measured evidence, not assumptions.
@@ -44,10 +44,12 @@ def estimate_loss(model, train_ids, val_ids, train_cfg) -> Dict[str, float]:
     model.eval()
     out: Dict[str, float] = {}
     for split in ("train", "val"):
+        # Fixed, architecture-independent batches at every evaluation.
+        generator = torch.Generator().manual_seed(train_cfg.seed + (17 if split == "train" else 29))
         losses = torch.zeros(train_cfg.eval_iters)
         for k in range(train_cfg.eval_iters):
             X, Y = get_batch(split, train_ids, val_ids, train_cfg.batch_size,
-                             train_cfg.block_size, train_cfg.device)
+                             train_cfg.block_size, train_cfg.device, generator=generator)
             _, loss = model(X, Y)
             losses[k] = loss.item()
         out[split] = round(float(losses.mean()), 6)
@@ -61,13 +63,16 @@ def train_variant(cfg: HelixConfig, train_ids, val_ids, out_dir: str) -> Dict:
     import numpy as np
     np.random.seed(cfg.train.seed)
     device = cfg.train.device
-    torch.set_num_threads(max(1, os.cpu_count() or 1))
+    from helix.runtime import configure_threads
+    configure_threads()
 
     os.makedirs(out_dir, exist_ok=True)
     model = HelixTransformer(cfg.model).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     optimizer = model.configure_optimizers(cfg.train)
 
+    initial_val = estimate_loss(model, train_ids, val_ids, cfg.train)["val"]
+    batch_generator = torch.Generator().manual_seed(cfg.train.seed + 47)
     start = time.perf_counter()
     train_losses: List[float] = []
     val_losses: List[float] = []
@@ -79,7 +84,7 @@ def train_variant(cfg: HelixConfig, train_ids, val_ids, out_dir: str) -> Dict:
         for pg in optimizer.param_groups:
             pg["lr"] = lr
         X, Y = get_batch("train", train_ids, val_ids, cfg.train.batch_size,
-                         cfg.train.block_size, device)
+                         cfg.train.block_size, device, generator=batch_generator)
         total_tokens += X.numel()
         _, loss = model(X, Y)
         loss.backward()
@@ -108,7 +113,8 @@ def train_variant(cfg: HelixConfig, train_ids, val_ids, out_dir: str) -> Dict:
         "final_val_loss": round(final_val, 6),
         "val_loss_curve": [round(v, 6) for v in val_losses],
         "checkpoint": ckpt_path,
-        "quality_per_sec": round(final_val / max(dt, 1e-9), 8),  # lower is better
+        "initial_val_loss": initial_val,
+        "heldout_loss_reduction_per_second": round((initial_val - final_val) / max(dt, 1e-9), 8),
     }
 
 
@@ -158,7 +164,7 @@ def run_ablation(config_path: str, out_path: str = "out/ablation-report.json",
               f"tok/s={res['tokens_per_sec']:.0f} "
               f"elapsed={res['elapsed_s']:.1f}s  params={res['n_params']:,}")
 
-    # Ranking: lower val loss is better; quality per sec = val_loss / time (lower better).
+    # Ranking only applies to this small controlled experiment.
     ranked = sorted(results, key=lambda r: r["final_val_loss"])
     report = {
         "hardware_device": device,
@@ -166,7 +172,7 @@ def run_ablation(config_path: str, out_path: str = "out/ablation-report.json",
         "best_by_val_loss": ranked[0]["block_type"] if ranked else None,
         "best_val_loss": ranked[0]["final_val_loss"] if ranked else None,
         "note": "Lower val loss = better. All variants trained from random init "
-                "on identical data with identical compute budget.",
+                "on identical batches with the same token budget; parameter count and wall compute differ.",
     }
     _os.makedirs(_os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:

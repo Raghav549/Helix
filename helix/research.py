@@ -18,6 +18,10 @@ instruments — their output is distinguished from model-generated claims.
 from __future__ import annotations
 
 import csv
+import ast
+import hashlib
+import platform
+import re
 import io
 import json
 import math
@@ -62,6 +66,8 @@ class ExperimentRecord:
     logs: List[str] = field(default_factory=list)
     device: str = "cpu"
     verifier_tools: List[str] = field(default_factory=list)
+    environment: Dict[str, Any] = field(default_factory=dict)
+    input_sha256: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -75,10 +81,14 @@ class ExperimentTracker:
         os.makedirs(self.root, exist_ok=True)
 
     def _exp_dir(self, exp_id: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", exp_id):
+            raise ValueError("invalid experiment id")
         return os.path.join(self.root, exp_id)
 
     def create(self, name: str, stage: str, config: Dict[str, Any],
                inputs: Dict[str, Any], device: str = "cpu") -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", stage):
+            raise ValueError("invalid experiment stage")
         exp_id = f"{stage}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
         d = self._exp_dir(exp_id)
         os.makedirs(d, exist_ok=True)
@@ -87,6 +97,9 @@ class ExperimentTracker:
             created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             config=config, inputs=inputs, outputs={}, metrics={},
             device=device,
+            environment={"python": platform.python_version(), "platform": platform.platform(),
+                         "sympy": getattr(sp, "__version__", None)},
+            input_sha256=hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest(),
         )
         rec.logs.append(f"created experiment {exp_id}")
         self._write_record(rec)
@@ -144,8 +157,10 @@ class ExperimentTracker:
     def _write_record(self, rec: ExperimentRecord) -> None:
         d = self._exp_dir(rec.id)
         os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "record.json"), "w", encoding="utf-8") as f:
+        path = os.path.join(d, "record.json")
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
             json.dump(rec.to_dict(), f, indent=2)
+        os.replace(path + ".tmp", path)
 
     # Also scan legacy metrics.json files (from other HELIX stages).
     def scan_legacy(self) -> List[dict]:
@@ -177,6 +192,56 @@ class SymbolicResult:
     steps: List[str] = field(default_factory=list)
 
 
+def safe_symbolic_expression(text: str):
+    """Construct SymPy objects from a strictly whitelisted AST, never eval text.
+
+    This prevents sympify/parse_expr from evaluating Python supplied by users.
+    Operations can still be computationally expensive; interactive services
+    must additionally enforce a wall time and process resource limit.
+    """
+    if not HAS_SYMPY:
+        raise RuntimeError("sympy unavailable")
+    if not isinstance(text, str) or len(text) > 512:
+        raise ValueError("expression too long")
+    tree = ast.parse(text.replace("^", "**"), mode="eval")
+    funcs = {name: getattr(sp, name) for name in
+             ("sin", "cos", "tan", "asin", "acos", "atan", "sqrt", "exp", "log", "Abs")}
+    constants = {"pi": sp.pi, "E": sp.E, "oo": sp.oo}
+    def parse(node, depth=0):
+        if depth > 24:
+            raise ValueError("expression too deep")
+        if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+            if abs(node.value) > 10**12:
+                raise ValueError("numeric constant too large")
+            return sp.Integer(node.value) if isinstance(node.value, int) else sp.Float(node.value)
+        if isinstance(node, ast.Name) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,30}", node.id):
+            return constants.get(node.id, sp.Symbol(node.id))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            arg = parse(node.operand, depth + 1)
+            return -arg if isinstance(node.op, ast.USub) else arg
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow)):
+            a, b = parse(node.left, depth + 1), parse(node.right, depth + 1)
+            if isinstance(node.op, ast.Pow):
+                if not b.is_number or abs(b) > 100:
+                    raise ValueError("exponent must be a number between -100 and 100")
+                return a ** b
+            if isinstance(node.op, ast.Add): return a + b
+            if isinstance(node.op, ast.Sub): return a - b
+            if isinstance(node.op, ast.Mult): return a * b
+            return a / b
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and
+                node.func.id in funcs and len(node.args) == 1 and not node.keywords):
+            return funcs[node.func.id](parse(node.args[0], depth + 1))
+        raise ValueError(f"unsupported expression node: {type(node).__name__}")
+    return parse(tree.body)
+
+
+def safe_symbol(variable: str):
+    if not isinstance(variable, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,30}", variable):
+        raise ValueError("invalid variable name")
+    return sp.Symbol(variable)
+
+
 class SymbolicMath:
     """Symbolic math via sympy; clearly marked as tool-verified."""
 
@@ -188,9 +253,9 @@ class SymbolicMath:
         if not self.available:
             return SymbolicResult(expression, "differentiate",
                                   "(sympy unavailable)", "heuristic", steps)
-        x = sp.Symbol(variable)
         try:
-            expr = sp.sympify(expression)
+            x = safe_symbol(variable)
+            expr = safe_symbolic_expression(expression)
             deriv = sp.diff(expr, x)
             steps.append(f"d/d{variable} {expression} = {deriv}")
             return SymbolicResult(expression, "differentiate", str(deriv),
@@ -205,9 +270,9 @@ class SymbolicMath:
         if not self.available:
             return SymbolicResult(expression, "integrate",
                                   "(sympy unavailable)", "heuristic", steps)
-        x = sp.Symbol(variable)
         try:
-            expr = sp.sympify(expression)
+            x = safe_symbol(variable)
+            expr = safe_symbolic_expression(expression)
             integ = sp.integrate(expr, x)
             steps.append(f"Integral of {expression} dx = {integ} + C")
             return SymbolicResult(expression, "integrate", str(integ) + " + C",
@@ -222,14 +287,14 @@ class SymbolicMath:
         if not self.available:
             return SymbolicResult(equation, "solve",
                                   "(sympy unavailable)", "heuristic", steps)
-        x = sp.Symbol(variable)
         try:
+            x = safe_symbol(variable)
             # support "a = b" form
             if "=" in equation:
                 lhs, rhs = equation.split("=", 1)
-                eq = sp.Eq(sp.sympify(lhs), sp.sympify(rhs))
+                eq = sp.Eq(safe_symbolic_expression(lhs), safe_symbolic_expression(rhs))
             else:
-                eq = sp.Eq(sp.sympify(equation), 0)
+                eq = sp.Eq(safe_symbolic_expression(equation), 0)
             sols = sp.solve(eq, x)
             steps.append(f"Solutions: {sols}")
             return SymbolicResult(equation, "solve", str(sols), "sympy", steps)
@@ -243,7 +308,7 @@ class SymbolicMath:
             return SymbolicResult(expression, "simplify",
                                   "(sympy unavailable)", "heuristic", steps)
         try:
-            expr = sp.sympify(expression)
+            expr = safe_symbolic_expression(expression)
             simp = sp.simplify(expr)
             steps.append(f"Simplified: {simp}")
             return SymbolicResult(expression, "simplify", str(simp), "sympy", steps)
@@ -258,10 +323,10 @@ class SymbolicMath:
         if not self.available:
             return SymbolicResult(expression, "limit",
                                   "(sympy unavailable)", "heuristic", steps)
-        x = sp.Symbol(variable)
         try:
-            expr = sp.sympify(expression)
-            p = sp.sympify(point)
+            x = safe_symbol(variable)
+            expr = safe_symbolic_expression(expression)
+            p = safe_symbolic_expression(point)
             lim = sp.limit(expr, x, p)
             steps.append(f"lim_{variable}->{point} {expression} = {lim}")
             return SymbolicResult(expression, "limit", str(lim), "sympy", steps)
@@ -290,10 +355,24 @@ class Statistics:
         out = []
         for v in values:
             try:
-                out.append(float(v))
+                n = float(v)
+                if math.isfinite(n):
+                    out.append(n)
             except (TypeError, ValueError):
                 pass
         return out
+
+    @staticmethod
+    def _pairs(x: List[Any], y: List[Any]) -> Tuple[List[float], List[float]]:
+        pairs = []
+        for a, b in zip(x, y):
+            try:
+                a, b = float(a), float(b)
+                if math.isfinite(a) and math.isfinite(b):
+                    pairs.append((a, b))
+            except (TypeError, ValueError):
+                continue
+        return [a for a, _ in pairs], [b for _, b in pairs]
 
     def describe(self, values: List[Any]) -> List[StatResult]:
         nums = self._nums(values)
@@ -315,8 +394,7 @@ class Statistics:
         ]
 
     def correlation(self, x: List[Any], y: List[Any]) -> StatResult:
-        xn = self._nums(x)
-        yn = self._nums(y)
+        xn, yn = self._pairs(x, y)
         n = min(len(xn), len(yn))
         if n < 2:
             return StatResult("correlation", 0.0, "insufficient data")
@@ -331,8 +409,7 @@ class Statistics:
         return StatResult("correlation", round(num / (dx * dy), 6))
 
     def linear_regression(self, x: List[Any], y: List[Any]) -> Dict[str, Any]:
-        xn = self._nums(x)
-        yn = self._nums(y)
+        xn, yn = self._pairs(x, y)
         n = min(len(xn), len(yn))
         if n < 2:
             return {"error": "insufficient data"}
@@ -359,11 +436,23 @@ class Statistics:
 # ============================================================================
 
 def load_csv(text: str) -> Tuple[List[str], List[List[str]]]:
-    reader = csv.reader(io.StringIO(text))
-    rows = list(reader)
-    if not rows:
-        return [], []
-    return rows[0], rows[1:]
+    if not isinstance(text, str) or len(text.encode('utf-8')) > 1024 * 1024:
+        raise ValueError("CSV must be text under 1 MiB")
+    try:
+        reader = csv.reader(io.StringIO(text))
+        header = next(reader, [])
+        if not header:
+            return [], []
+        if len(header) > 128 or any(not name.strip() for name in header) or len(set(header)) != len(header):
+            raise ValueError("CSV requires 1..128 distinct, nonempty column names")
+        rows = []
+        for row in reader:
+            if len(rows) >= 10000 or len(row) > 128:
+                raise ValueError("CSV exceeds 10,000 rows or 128 columns")
+            rows.append(row)
+        return header, rows
+    except csv.Error as exc:
+        raise ValueError(f"invalid CSV: {exc}") from exc
 
 
 def summarize_csv(text: str) -> dict:
@@ -391,19 +480,18 @@ def summarize_csv(text: str) -> dict:
 # ============================================================================
 
 def plot_line(x: List[Any], y: List[Any], title: str,
-              out_path: str) -> dict:
+              out_path: str, xlabel: str = "x", ylabel: str = "y") -> dict:
     if not HAS_MPL:
         return {"error": "matplotlib unavailable"}
-    xn = Statistics()._nums(x)
-    yn = Statistics()._nums(y)
-    n = min(len(xn), len(yn))
+    xn, yn = Statistics()._pairs(x, y)
+    n = len(xn)
     if n < 1:
         return {"error": "no numeric data"}
     plt.figure()
     plt.plot(xn[:n], yn[:n], marker="o")
     plt.title(title)
-    plt.xlabel("x")
-    plt.ylabel("y")
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
     plt.grid(True, alpha=0.3)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     plt.savefig(out_path, dpi=100, bbox_inches="tight")
@@ -442,7 +530,7 @@ def evaluate_claim(claim: str, tool_result: str) -> dict:
     """
     claim_norm = " ".join(claim.split()).strip().lower()
     tool_norm = " ".join(tool_result.split()).strip().lower()
-    agree = claim_norm == tool_norm or claim_norm in tool_norm or tool_norm in claim_norm
+    agree = bool(claim_norm and tool_norm) and claim_norm == tool_norm and not tool_norm.startswith("error:")
     return {
         "claim": claim,
         "tool_result": tool_result,
@@ -475,3 +563,28 @@ def run_reproducible_experiment(tracker: ExperimentTracker, name: str,
         tracker.log(exp_id, f"failed: {exc}")
         raise
     return tracker.read(exp_id)
+
+
+def run_bounded_math(operation: str, expression: str, variable: str = 'x',
+                     point: str = '0', timeout_s: float = 12.0) -> dict:
+    """Run validated symbolic work in a bounded child process; no shell."""
+    import subprocess
+    import sys
+    payload = json.dumps({'operation': operation, 'expression': expression,
+                          'variable': variable, 'point': point})
+    if len(payload) > 4096:
+        raise ValueError('request too large')
+    env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': os.environ.get('HOME', ''),
+           'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MPLBACKEND': 'Agg'}
+    try:
+        proc = subprocess.run([sys.executable, '-m', 'helix.math_worker'], input=payload,
+                              capture_output=True, text=True, timeout=timeout_s, env=env)
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'error': 'symbolic calculation timed out', 'verified_by': None}
+    try:
+        result = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {'ok': False, 'error': 'symbolic worker failed', 'verified_by': None}
+    if proc.returncode != 0:
+        result['ok'] = False
+    return result

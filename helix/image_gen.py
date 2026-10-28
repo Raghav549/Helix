@@ -4,7 +4,7 @@ A small latent diffusion model (LDM) on CPU:
   * VAE (encoder/decoder) compresses images to a latent space (reconstruction + KL)
   * Small UNet in latent space predicts noise given latent + timestep
   * DDPM forward/noise schedule + reverse (denoising) sampler
-  * Optional text conditioning via projected LLM token embeddings
+  * Optional text conditioning via a small, independently trained byte/GRU encoder
 
 Everything is trained from random initialization; no pretrained image weights are
 used. Kept intentionally small (32x32 images, tiny latent) so a full training
@@ -63,7 +63,7 @@ class ImageGenConfig:
     beta_end: float = 0.02
     schedule: str = "cosine"        # cosine | linear
 
-    # Text conditioning (optional, projected LLM embeddings)
+    # Text conditioning (optional byte/GRU encoder or caller-provided embeddings)
     cond_dim: int = 64              # condition embedding dim
     use_text_conditioning: bool = False
     cond_token_dim: int = 64        # dim of incoming text token embedding
@@ -75,6 +75,26 @@ class ImageGenConfig:
     seed: int = 1337
     device: str = "cpu"
     dtype: str = "float32"
+    vae_pretrain_iters: int = 0
+
+    def __post_init__(self):
+        if min(self.image_size, self.image_channels, self.latent_size, self.latent_channels,
+               self.vae_channels, self.unet_channels, self.unet_heads, self.time_embed_dim,
+               self.cond_token_dim, self.batch_size, self.max_iters) < 1:
+            raise ValueError("image dimensions and training counts must be positive")
+        if self.image_size != self.latent_size * 4 or self.latent_size % 4:
+            raise ValueError("image_size must be 4 * latent_size, divisible by 16")
+        if self.unet_channels % 8 or self.unet_channels % self.unet_heads:
+            raise ValueError("UNet channels must be divisible by 8 and by heads")
+        if self.time_embed_dim % 2 or self.num_timesteps < 2 or self.vae_pretrain_iters < 0:
+            raise ValueError("invalid diffusion dimensions or steps")
+        if self.schedule not in ("cosine", "linear"):
+            raise ValueError("schedule must be cosine or linear")
+        if not 0 < self.beta_start < self.beta_end < 1 or self.learning_rate <= 0 or self.kl_weight < 0:
+            raise ValueError("invalid diffusion schedule or training hyperparameters")
+        if (self.downsample_factor != 4 or self.vae_blocks != 2 or self.unet_blocks != 2 or
+                self.cond_dim != 64 or self.dtype != "float32"):
+            raise ValueError("this image architecture fixes downsample_factor=4, vae_blocks=2, unet_blocks=2, cond_dim=64 and dtype=float32")
 
 
 # ============================================================================
@@ -187,11 +207,9 @@ class AttentionBlock(nn.Module):
         B, C, H, W = x.shape
         h = self.norm(x)
         qkv = self.qkv(h).view(B, 3, self.heads, C // self.heads, H * W)
-        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
-        att = torch.softmax(
-            torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(C // self.heads), dim=-1
-        )
-        out = torch.matmul(att, v)  # (B, heads, H*W, head_dim)
+        q, k, v = [qkv[:, i].transpose(-2, -1) for i in range(3)]
+        # Attention is over spatial positions, not channel dimensions.
+        out = F.scaled_dot_product_attention(q, k, v)
         out = out.transpose(2, 3).contiguous().view(B, C, H, W)
         return x + self.proj(out)
 
@@ -351,6 +369,25 @@ class VAE(nn.Module):
 # Latent Diffusion Model
 # ============================================================================
 
+class PromptEncoder(nn.Module):
+    """Trainable UTF-8 byte encoder; no external embeddings or weights."""
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(257, dim, padding_idx=0)
+        self.gru = nn.GRU(dim, dim, batch_first=True)
+
+    def forward(self, prompts: List[str], device) -> torch.Tensor:
+        if not prompts or any(not isinstance(p, str) or len(p.encode("utf-8")) > 1024 for p in prompts):
+            raise ValueError("prompts must be nonempty UTF-8 strings under 1024 bytes")
+        encoded = [[b + 1 for b in p.encode("utf-8")[:128]] or [1] for p in prompts]
+        ids = torch.zeros(len(encoded), max(map(len, encoded)), dtype=torch.long, device=device)
+        for i, row in enumerate(encoded):
+            ids[i, :len(row)] = torch.tensor(row, device=device)
+        output, _ = self.gru(self.embedding(ids))
+        ends = torch.tensor([len(row)-1 for row in encoded], device=device)
+        return output[torch.arange(len(encoded), device=device), ends].unsqueeze(1)
+
+
 class LatentDiffusion(nn.Module):
     """VAE + diffusion in latent space."""
 
@@ -359,20 +396,30 @@ class LatentDiffusion(nn.Module):
         self.config = config
         self.vae = VAE(config)
         self.unet = ConditionedUNet(config)
+        self.text_encoder = PromptEncoder(config.cond_token_dim) if config.use_text_conditioning else None
         self.schedule = DiffusionSchedule(config)
+        self.register_buffer("latent_mean", torch.zeros(1, config.latent_channels, 1, 1))
+        self.register_buffer("latent_std", torch.ones(1, config.latent_channels, 1, 1))
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
-        return self.vae.encode(images)
+        return (self.vae.encode(images) - self.latent_mean) / self.latent_std
 
     def decode_latents(self, z: torch.Tensor) -> torch.Tensor:
-        return self.vae.decode(z)
+        return self.vae.decode(z * self.latent_std + self.latent_mean)
 
     def forward(
         self,
         images: torch.Tensor,
         text_emb: Optional[torch.Tensor] = None,
+        prompts: Optional[List[str]] = None,
     ) -> dict:
         """Training forward: encode -> add noise -> predict noise."""
+        if prompts is not None:
+            if self.text_encoder is None:
+                raise ValueError("model was not configured for text conditioning")
+            if len(prompts) != images.size(0):
+                raise ValueError("one prompt per image required")
+            text_emb = self.text_encoder(prompts, images.device)
         z0 = self.encode_images(images)  # (B, latent_ch, L, L)
         B = z0.size(0)
         device = z0.device
@@ -384,14 +431,14 @@ class LatentDiffusion(nn.Module):
         # VAE reconstruction loss (on a separate pass)
         recon, mu, logvar = self.vae(images)
         recon_loss = F.mse_loss(recon, images)
-        kl_loss = (-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())).mean()
+        kl_loss = (-0.5 * (1 + logvar - mu.pow(2) - logvar.exp())).mean()
         vae_loss = recon_loss + self.config.kl_weight * kl_loss
 
         # Diffusion loss
         diff_loss = F.mse_loss(noise_pred, noise)
 
         return {
-            "loss": diff_loss + self.config.kl_weight * 0.0 + vae_loss * 0.1,
+            "loss": diff_loss + vae_loss * 0.1,
             "diff_loss": diff_loss,
             "vae_loss": vae_loss,
             "recon_loss": recon_loss,
@@ -399,39 +446,46 @@ class LatentDiffusion(nn.Module):
         }
 
     @torch.no_grad()
-    def sample(
-        self,
-        num_images: int = 1,
-        text_emb: Optional[torch.Tensor] = None,
-        timesteps: Optional[int] = None,
-        device: str = "cpu",
-    ) -> torch.Tensor:
-        """Reverse diffusion sampling from pure noise in latent space."""
-        T = timesteps or self.config.num_timesteps
-        L = self.config.latent_size
-        z = torch.randn(num_images, self.config.latent_channels, L, L, device=device)
-        schedule = self.schedule.to(device)
+    def sample(self, num_images: int = 1, text_emb: Optional[torch.Tensor] = None,
+               timesteps: Optional[int] = None, device: str = "cpu",
+               prompts: Optional[List[str]] = None, seed: Optional[int] = None,
+               init_images: Optional[torch.Tensor] = None, strength: float = 0.6) -> torch.Tensor:
+        """DDPM sampling, optionally initialized from a noised input image.
 
-        for i in reversed(range(T)):
+        `timesteps` uses the first T schedule steps (not an accelerated full
+        schedule). For normal generation use the full configured schedule.
+        """
+        T = timesteps if timesteps is not None else self.config.num_timesteps
+        if not 1 <= T <= self.config.num_timesteps or not 1 <= num_images <= 16:
+            raise ValueError("invalid timesteps or image count")
+        if prompts is not None:
+            if self.text_encoder is None:
+                raise ValueError("checkpoint is unconditional and cannot use prompts")
+            if len(prompts) != num_images:
+                raise ValueError("one prompt per image required")
+            text_emb = self.text_encoder(prompts, device)
+        gen = torch.Generator(device=device)
+        if seed is None: gen.seed()
+        else: gen.manual_seed(seed)
+        L = self.config.latent_size
+        schedule = self.schedule.to(device)
+        if init_images is None:
+            z = torch.randn(num_images, self.config.latent_channels, L, L, device=device, generator=gen)
+            start = T - 1
+        else:
+            if not 0.0 < strength <= 1.0 or init_images.size(0) != num_images:
+                raise ValueError("strength must be in (0,1] and image count must match")
+            z0 = self.encode_images(init_images.to(device))
+            start = max(0, min(T - 1, int(strength * (T - 1))))
+            noise = torch.randn(z0.shape, device=device, dtype=z0.dtype, generator=gen)
+            z = schedule.q_sample(z0, torch.full((num_images,), start, device=device, dtype=torch.long), noise)
+        betas, alphas, ac = (schedule.register[k] for k in ("betas", "alphas", "alphas_cumprod"))
+        for i in range(start, -1, -1):
             t = torch.full((num_images,), i, device=device, dtype=torch.long)
             noise_pred = self.unet(z, t, text_emb)
-            betas = schedule.register["betas"].to(device)
-            alphas = schedule.register["alphas"].to(device)
-            ac = schedule.register["alphas_cumprod"].to(device)
-            beta = betas[i]
-            alpha = alphas[i]
-            alpha_cum = ac[i]
-            if i > 0:
-                noise = torch.randn_like(z)
-            else:
-                noise = torch.zeros_like(z)
-            # DDPM reverse step (mean-only, simplified variance)
-            z = (
-                1
-                / torch.sqrt(alpha)
-                * (z - (1 - alpha) / torch.sqrt(1 - alpha_cum) * noise_pred)
-                + torch.sqrt(beta) * noise
-            )
+            beta, alpha, alpha_cum = betas[i], alphas[i], ac[i]
+            noise = torch.randn(z.shape, device=device, dtype=z.dtype, generator=gen) if i else torch.zeros_like(z)
+            z = (z - (1 - alpha) / torch.sqrt(1 - alpha_cum) * noise_pred) / torch.sqrt(alpha) + torch.sqrt(beta) * noise
         return self.decode_latents(z)
 
 
@@ -444,24 +498,52 @@ def train_image_gen(
     images: torch.Tensor,  # (N, C, H, W) in [-1, 1]
     text_embeddings: Optional[torch.Tensor] = None,  # (N, num_tokens, cond_token_dim)
     out_dir: str = "out/image_gen",
+    captions: Optional[List[str]] = None,
 ) -> dict:
     """Train VAE + diffusion from random init. Returns metrics."""
     os.makedirs(out_dir, exist_ok=True)
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
     device = config.device
-    torch.set_num_threads(max(1, os.cpu_count() or 1))
+    from helix.runtime import configure_threads
+    configure_threads()
 
     model = LatentDiffusion(config).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     schedule = model.schedule.to(device)
 
     N = images.size(0)
+    if N < 1 or images.ndim != 4 or tuple(images.shape[1:]) != (config.image_channels, config.image_size, config.image_size):
+        raise ValueError("images have invalid shape")
+    if config.use_text_conditioning and captions is None and text_embeddings is None:
+        raise ValueError("conditioned training requires captions or explicit text embeddings")
+    if captions is not None and (not config.use_text_conditioning or len(captions) != N):
+        raise ValueError("conditioned training needs one caption per image")
     log_path = os.path.join(out_dir, "log.jsonl")
     start = time.perf_counter()
     best = float("inf")
 
     model.train()
+    # Optional VAE warmup freezes the latent representation during diffusion.
+    for it in range(config.vae_pretrain_iters):
+        idx = torch.randint(0, N, (config.batch_size,))
+        batch = images[idx].to(device)
+        recon, mu, logvar = model.vae(batch)
+        vae_loss = F.mse_loss(recon, batch) + config.kl_weight * (-.5 * (1 + logvar - mu.square() - logvar.exp())).mean()
+        opt.zero_grad(set_to_none=True)
+        vae_loss.backward()
+        opt.step()
+    if config.vae_pretrain_iters:
+        # Match the latent prior's location and scale to unit Gaussian noise.
+        # Estimate only on training images; store the statistics in checkpoints.
+        with torch.no_grad():
+            latent_batches = [model.vae.encode(images[i:i+config.batch_size].to(device))
+                              for i in range(0, N, config.batch_size)]
+            latents = torch.cat(latent_batches, dim=0)
+            model.latent_mean.copy_(latents.mean(dim=(0, 2, 3), keepdim=True))
+            model.latent_std.copy_(latents.std(dim=(0, 2, 3), keepdim=True).clamp_min(1e-4))
+        for parameter in model.vae.parameters():
+            parameter.requires_grad_(False)
     for it in range(config.max_iters):
         idx = torch.randint(0, N, (config.batch_size,))
         batch = images[idx].to(device)
@@ -470,8 +552,11 @@ def train_image_gen(
             tb = text_embeddings[idx].to(device)
 
         opt.zero_grad(set_to_none=True)
-        out = model(batch, tb)
+        batch_captions = [captions[int(i)] for i in idx] if captions is not None else None
+        out = model(batch, tb, prompts=batch_captions)
         loss = out["loss"]
+        if not torch.isfinite(loss):
+            raise RuntimeError("non-finite image loss")
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
@@ -494,6 +579,12 @@ def train_image_gen(
         "stage": "image_gen",
         "config": asdict(config),
         "num_images": N,
+        "initialization": "random",
+        "text_conditioned": bool(captions is not None or text_embeddings is not None),
+        "vae_pretrain_iters": config.vae_pretrain_iters,
+        "parameters": sum(p.numel() for p in model.parameters()),
+        "latent_mean": model.latent_mean.flatten().detach().cpu().tolist(),
+        "latent_std": model.latent_std.flatten().detach().cpu().tolist(),
         "max_iters": config.max_iters,
         "elapsed_s": round(dt, 3),
         "best_loss": round(best, 6),
@@ -511,7 +602,7 @@ def train_image_gen(
 
 def load_image_gen_model(config: ImageGenConfig, ckpt_path: str, device: str = "cpu"):
     model = LatentDiffusion(config).to(device)
-    state = torch.load(ckpt_path, map_location=device)
+    state = torch.load(ckpt_path, map_location=device, weights_only=True)
     model.load_state_dict(state)
     model.eval()
     return model
@@ -523,9 +614,14 @@ def generate_images(
     num_images: int = 1,
     text_emb: Optional[torch.Tensor] = None,
     device: str = "cpu",
+    prompts: Optional[List[str]] = None,
+    seed: Optional[int] = None,
+    init_images: Optional[torch.Tensor] = None,
+    strength: float = 0.6,
 ) -> List[Image.Image]:
     model.eval()
-    out = model.sample(num_images=num_images, text_emb=text_emb, device=device)
+    out = model.sample(num_images=num_images, text_emb=text_emb, device=device,
+                       prompts=prompts, seed=seed, init_images=init_images, strength=strength)
     # out: (B, 3, 32, 32) in [-1, 1] -> PIL images
     images = []
     for i in range(out.size(0)):

@@ -72,7 +72,7 @@ def test_agent_loop_executes_preapproved_tool(monkeypatch):
     agent = Agent(model, tok, registry=reg, device="cpu", max_steps=4,
                   max_time_s=30.0, require_approval=True)
     # Pre-approve the python tool (consequential) so the gate passes.
-    agent.set_tool_approved("python", True)
+    agent.set_tool_approved("python", True, "result = 40 + 2")
 
     # Monkeypatch _plan to force a python call then an answer.
     calls = {"n": 0}
@@ -118,7 +118,7 @@ def test_agent_unknown_tool(monkeypatch):
     model, tok = _tiny_agent_model_and_tok()
     reg = ToolRegistry.default_registry()
     agent = Agent(model, tok, registry=reg, device="cpu", max_steps=3,
-                  max_time_s=30.0, require_approval=False)
+                  max_time_s=30.0, require_approval=True)
 
     def fake_plan(goal, history):
         return "CALL: nosuchtool do something\n"

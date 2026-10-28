@@ -1,36 +1,33 @@
-"""HELIX corpus discovery and ingestion pipeline.
+"""Rights-reviewed corpus discovery, local extraction, filtering and manifests.
 
-Extensible, provenance-tracked, rights-aware. Discovers eligible sources and
-records per-document provenance so material whose legal status cannot be
-established is quarantined and excluded from training.
-
-Zero-budget-first: the local-workflow path scans a user-provided directory
-(no network assumed). Network ingestion (Internet Archive, Wikipedia dumps,
-Open Library, etc.) is recorded as candidate sources in the manifest and can
-be enabled separately when connectivity and budget allow.
+Discovery does not grant rights. Local ingestion requires an explicit license,
+license evidence and a user assertion of training rights. Unknown material is
+quarantined; no legal conclusions are inferred from file visibility or an API.
 """
-
 from __future__ import annotations
-
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
+from pathlib import Path
+import re
 import time
+import urllib.parse
+import urllib.request
+import zipfile
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
 
-# Rights categories
-RIGHTS_DOWNLOAD = "download"      # may be downloaded
-RIGHTS_TRAIN = "train"            # may be used for training
-RIGHTS_REDISTRIBUTE = "redistribute"  # may be redistributed
-
-TEXT_EXTENSIONS = {".txt", ".md", ".text", ".rst", ".nfo", ".csv", ".tsv", ".jsonl"}
-CODE_EXTENSIONS = {".py", ".js", ".ts", ".c", ".cpp", ".h", ".hpp", ".rs", ".go",
-                   ".java", ".rb", ".sh", ".pl", ".lua", ".hs", ".ml", ".scala",
-                   ".swift", ".kt", ".r", ".m", ".mm", ".asm", ".s", ".f", ".f90",
-                   ".cob", ".cbl", ".bas", ".pas", ".adoc", ".tex"}
-
-ENCODINGS = ("utf-8", "utf-8-sig", "latin-1", "cp1252")
+RIGHTS_DOWNLOAD = 'download'
+RIGHTS_TRAIN = 'train'
+RIGHTS_REDISTRIBUTE = 'redistribute'
+TEXT_EXTENSIONS = {'.txt', '.md', '.text', '.rst', '.nfo', '.csv', '.tsv', '.jsonl', '.tex'}
+CODE_EXTENSIONS = {'.py', '.js', '.ts', '.c', '.cpp', '.h', '.hpp', '.rs', '.go',
+                   '.java', '.rb', '.sh', '.pl', '.lua', '.hs', '.ml', '.scala',
+                   '.swift', '.kt', '.r', '.m', '.asm', '.s', '.f', '.f90',
+                   '.cob', '.cbl', '.bas', '.pas', '.adoc'}
+EXTRA_EXTENSIONS = {'.html', '.htm', '.pdf', '.epub', '.ipynb', '.png', '.jpg', '.jpeg'}
+MAX_FILE_BYTES = 16 * 1024 * 1024
 
 
 @dataclass
@@ -38,10 +35,10 @@ class CorpusSource:
     source_id: str
     name: str
     url: str
-    fmt: str = "text"                       # text | html | pdf | epub | code | notebook | image
-    language: str = "und"
-    license: str = "unknown"
-    rights: List[str] = field(default_factory=list)   # subset of download/train/redistribute
+    fmt: str = 'text'
+    language: str = 'und'
+    license: str = 'unknown'
+    rights: List[str] = field(default_factory=list)
     retrieved_at: Optional[str] = None
     content_hash: Optional[str] = None
     size_bytes: Optional[int] = None
@@ -49,113 +46,166 @@ class CorpusSource:
     notes: Optional[str] = None
     quarantined: bool = False
     quarantine_reason: Optional[str] = None
-    quality_score: Optional[float] = None       # 0..1 heuristic
-    extraction_confidence: Optional[float] = None # 0..1
+    quality_score: Optional[float] = None
+    extraction_confidence: Optional[float] = None
+    license_evidence: Optional[str] = None
+    source_version: Optional[str] = None
+    rights_confirmed: bool = False
 
 
 @dataclass
 class CorpusManifest:
-    version: str = "1.0"
-    created_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    version: str = '2.0'
+    created_at: str = field(default_factory=lambda: time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
     sources: List[CorpusSource] = field(default_factory=list)
 
     def add(self, source: CorpusSource) -> None:
-        for i, s in enumerate(self.sources):
-            if s.source_id == source.source_id:
+        for i, old in enumerate(self.sources):
+            if old.source_id == source.source_id:
                 self.sources[i] = source
                 return
         self.sources.append(source)
 
     def save(self, path: str) -> None:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        payload = {
-            "version": self.version,
-            "created_at": self.created_at,
-            "sources": [asdict(s) for s in self.sources],
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({'version': self.version, 'created_at': self.created_at,
+                       'sources': [asdict(s) for s in self.sources]}, f, indent=2, ensure_ascii=False)
 
     @classmethod
-    def load(cls, path: str) -> "CorpusManifest":
-        with open(path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        m = cls(version=payload.get("version", "1.0"),
-                created_at=payload.get("created_at", ""))
-        for s in payload.get("sources", []):
-            m.sources.append(CorpusSource(**s))
-        return m
+    def load(cls, path: str) -> 'CorpusManifest':
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        return cls(data.get('version', '1.0'), data.get('created_at', ''),
+                   [CorpusSource(**s) for s in data.get('sources', [])])
 
     def trainable(self) -> List[CorpusSource]:
-        return [s for s in self.sources
-                if RIGHTS_TRAIN in s.rights and not s.quarantined]
+        return [s for s in self.sources if RIGHTS_TRAIN in s.rights and not s.quarantined
+                and s.rights_confirmed and isinstance(s.license, str)
+                and s.license.strip().lower() not in ('unknown', 'varies', '', 'none')
+                and isinstance(s.license_evidence, str) and bool(s.license_evidence.strip())
+                and bool(s.content_hash)]
 
     def quarantined(self) -> List[CorpusSource]:
         return [s for s in self.sources if s.quarantined]
 
     def summary(self) -> dict:
-        return {
-            "total": len(self.sources),
-            "trainable": len(self.trainable()),
-            "quarantined": len(self.quarantined()),
-            "by_fmt": _count_by(self.sources, "fmt"),
-            "by_lang": _count_by(self.sources, "language"),
-        }
+        return {'total': len(self.sources), 'trainable': len(self.trainable()),
+                'quarantined': len(self.quarantined()),
+                'by_fmt': _count_by(self.sources, 'fmt'), 'by_lang': _count_by(self.sources, 'language')}
 
 
-def _count_by(items: List, attr: str) -> Dict[str, int]:
-    d: Dict[str, int] = {}
-    for it in items:
-        k = getattr(it, attr, "unknown")
-        d[k] = d.get(k, 0) + 1
-    return d
+def _count_by(items, attr):
+    result = {}
+    for item in items:
+        value = getattr(item, attr, 'unknown')
+        result[value] = result.get(value, 0) + 1
+    return result
 
 
 def sha256_file(path: str) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(65536), b''):
             h.update(chunk)
     return h.hexdigest()
 
 
 def read_text(path: str) -> Optional[str]:
-    """Read a file trying several encodings; return None if undecodable."""
-    for enc in ENCODINGS:
+    try:
+        raw = Path(path).read_bytes()
+        if raw.startswith((b'\xff\xfe', b'\xfe\xff')):
+            return raw.decode('utf-16')
+        return raw.decode('utf-8-sig')
+    except (UnicodeError, OSError):
+        return None
+
+
+class _HTMLText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.hidden = 0
+    def handle_starttag(self, tag, attrs):
+        if tag in ('script', 'style', 'noscript'):
+            self.hidden += 1
+        elif tag in ('p', 'div', 'li', 'h1', 'h2', 'h3', 'pre', 'tr', 'br'):
+            self.parts.append('\n')
+    def handle_endtag(self, tag):
+        if tag in ('script', 'style', 'noscript') and self.hidden:
+            self.hidden -= 1
+        elif tag in ('p', 'div', 'li', 'pre', 'tr'):
+            self.parts.append('\n')
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def _html_text(text):
+    parser = _HTMLText()
+    parser.feed(text)
+    return ''.join(parser.parts).strip()
+
+
+def extract_text(path: str) -> tuple[str, str]:
+    """Extract supported formats. Reject unsupported image OCR explicitly."""
+    ext = Path(path).suffix.lower()
+    if os.path.getsize(path) > MAX_FILE_BYTES:
+        raise ValueError('file exceeds 16 MiB extraction limit')
+    if ext in TEXT_EXTENSIONS or ext in CODE_EXTENSIONS or ext in ('.html', '.htm'):
+        text = read_text(path)
+        if text is None:
+            raise ValueError('undecodable')
+        if ext in ('.html', '.htm'):
+            return _html_text(text), 'html'
+        return text, 'code' if ext in CODE_EXTENSIONS else 'text'
+    if ext == '.ipynb':
+        data = json.loads(Path(path).read_text(encoding='utf-8'))
+        cells = []
+        for cell in data.get('cells', []):
+            kind = cell.get('cell_type')
+            if kind not in ('markdown', 'code'):
+                continue
+            source = cell.get('source', '')
+            cells.append(f'[{kind}]\n' + (''.join(source) if isinstance(source, list) else str(source)))
+        return '\n\n'.join(cells), 'notebook'
+    if ext == '.epub':
+        with zipfile.ZipFile(path) as z:
+            entries = [x for x in z.infolist() if x.filename.lower().endswith(('.html', '.xhtml', '.htm'))]
+            if sum(x.file_size for x in entries) > MAX_FILE_BYTES:
+                raise ValueError('epub uncompressed size exceeds limit')
+            chapters = [_html_text(z.read(x).decode('utf-8', 'strict')) for x in sorted(entries, key=lambda x: x.filename)]
+            return '\n\n'.join(chapters), 'epub'
+    if ext == '.pdf':
         try:
-            with open(path, "r", encoding=enc, errors="strict") as f:
-                return f.read()
-        except (UnicodeDecodeError, UnicodeError):
-            continue
-    return None
+            from pypdf import PdfReader
+        except ImportError as exc:
+            raise ValueError('PDF requires optional pypdf; scanned PDFs require OCR') from exc
+        reader = PdfReader(path)
+        if reader.is_encrypted or len(reader.pages) > 500:
+            raise ValueError('encrypted PDF or page limit exceeded')
+        text = '\n\n'.join(page.extract_text() or '' for page in reader.pages)
+        if len(text.strip()) < 20:
+            raise ValueError('PDF text extraction insufficient; OCR required')
+        return text, 'pdf'
+    raise ValueError('format requires OCR or is not supported')
 
 
 def _simple_language(text: str) -> str:
-    """Cheap language hint from character ranges (fallback only)."""
-    if not text:
-        return "und"
-    cjk = sum(1 for ch in text
-              if "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff")
-    cyr = sum(1 for ch in text if "\u0400" <= ch <= "\u04ff")
-    lat = sum(1 for ch in text if ch.isascii() and ch.isalpha())
-    total = max(1, len(text))
-    if cjk / total > 0.05:
-        return "zh/ja/ko"
-    if cyr / total > 0.05:
-        return "ru/cyrillic"
-    if lat / total > 0.5:
-        return "latin-script"
-    return "und"
+    if not text: return 'und'
+    ranges = [('devanagari', '\u0900', '\u097f'), ('cyrillic', '\u0400', '\u04ff'),
+              ('cjk', '\u3040', '\u9fff')]
+    for name, lo, hi in ranges:
+        if sum(lo <= c <= hi for c in text) / len(text) > .05: return name
+    if sum(c.isascii() and c.isalpha() for c in text) / len(text) > .4: return 'latin-script'
+    return 'und'
 
 
 def _quality_score(text: str) -> float:
-    """0..1 heuristic: penalizes short, control-char-heavy text."""
-    if not text or len(text) < 10:
-        return 0.0
-    control = sum(1 for ch in text if ord(ch) < 32 and ch not in "\t\n\r")
-    ratio = control / max(1, len(text))
-    length_score = min(1.0, len(text) / 1000.0)
-    return round(max(0.0, 1.0 - ratio * 10) * length_score, 3)
+    if len(text.strip()) < 10: return 0.0
+    control = sum(ord(c) < 32 and c not in '\t\n\r' for c in text)
+    replacement = text.count('\ufffd')
+    return round(max(0., 1 - 10 * (control + replacement) / len(text)) * min(1., len(text) / 1000), 3)
 
 
 def quarantine(source: CorpusSource, reason: str) -> CorpusSource:
@@ -165,119 +215,121 @@ def quarantine(source: CorpusSource, reason: str) -> CorpusSource:
     return source
 
 
-# ---------------------------------------------------------------------------
-# Local (zero-network) ingestion
-# ---------------------------------------------------------------------------
+def _shingles(text: str) -> set:
+    words = re.findall(r'\w+', text.casefold())
+    return {tuple(words[i:i+5]) for i in range(max(0, len(words) - 4))}
+
 
 def scan_directory(directory: str, manifest: Optional[CorpusManifest] = None,
-                   rights: Optional[List[str]] = None,
-                   default_license: str = "user-provided") -> CorpusManifest:
-    """Scan a local directory for ingestable text/code files.
-
-    Rights default to train-only for user-provided local files (download /
-    redistribute not assumed). Each file becomes a CorpusSource with content
-    hash, language hint, quality score, and retrieval timestamp.
+                   rights: Optional[List[str]] = None, default_license: str = 'unknown',
+                   license_evidence: Optional[str] = None, source_version: Optional[str] = None,
+                   attribution: Optional[str] = None, contamination_strings: tuple = ()) -> CorpusManifest:
+    """Scan bounded local files. Explicit rights + evidence are an attestation,
+    not automated legal review. Quarantine duplicates, suspected leaks and unknowns.
     """
-    if manifest is None:
-        manifest = CorpusManifest()
-    if rights is None:
-        rights = [RIGHTS_TRAIN]
-
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    for root, _dirs, files in os.walk(directory):
-        for fname in sorted(files):
-            ext = os.path.splitext(fname)[1].lower()
-            if ext not in TEXT_EXTENSIONS and ext not in CODE_EXTENSIONS:
+    manifest = manifest if manifest is not None else CorpusManifest()
+    confirmed = bool(rights and RIGHTS_TRAIN in rights and isinstance(default_license, str)
+                     and default_license.strip().lower() not in ('', 'unknown', 'varies', 'none')
+                     and isinstance(license_evidence, str) and license_evidence.strip())
+    seen = {s.content_hash for s in manifest.sources if s.content_hash and not s.quarantined}
+    prior_shingles = []
+    now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    directory = os.path.realpath(directory)
+    for root, dirs, files in os.walk(directory, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d not in {'.git', '.venv', 'node_modules', '__pycache__', 'out'})
+        for filename in sorted(files):
+            path = os.path.join(root, filename)
+            ext = Path(filename).suffix.lower()
+            if ext not in TEXT_EXTENSIONS | CODE_EXTENSIONS | EXTRA_EXTENSIONS or os.path.islink(path):
                 continue
-            path = os.path.join(root, fname)
             try:
                 size = os.path.getsize(path)
-            except OSError:
-                continue
-            if size == 0:
-                continue
-            text = read_text(path)
-            if text is None:
-                q = CorpusSource(
-                    source_id=hashlib.sha256(path.encode()).hexdigest()[:16],
-                    name=fname, url=path, fmt=ext.lstrip("."),
-                    rights=[], retrieved_at=now, size_bytes=size,
-                    quarantined=True, quarantine_reason="undecodable",
-                )
-                manifest.add(q)
-                continue
-            lang = _simple_language(text)
-            qscore = _quality_score(text)
-            if qscore < 0.05:
-                q = CorpusSource(
-                    source_id=sha256_file(path)[:16], name=fname, url=path,
-                    fmt=ext.lstrip("."), language=lang, license=default_license,
-                    rights=[], retrieved_at=now,
-                    content_hash=sha256_file(path), size_bytes=size,
-                    quality_score=qscore, extraction_confidence=1.0,
-                    quarantined=True, quarantine_reason="low_quality",
-                )
-                manifest.add(q)
-                continue
-            fmt = "code" if ext in CODE_EXTENSIONS else "text"
-            src = CorpusSource(
-                source_id=sha256_file(path)[:16], name=fname, url=path,
-                fmt=fmt, language=lang, license=default_license,
-                rights=list(rights), retrieved_at=now,
-                content_hash=sha256_file(path), size_bytes=size,
-                quality_score=qscore, extraction_confidence=1.0,
-                notes=f"discovered by scan_directory({directory})",
-            )
-            manifest.add(src)
+                if size > MAX_FILE_BYTES:
+                    raise ValueError('file exceeds 16 MiB extraction limit')
+                digest = sha256_file(path)
+                local = os.path.relpath(path, os.getcwd())
+                source_url = path if local == '..' or local.startswith('..' + os.sep) else local
+                source = CorpusSource(hashlib.sha256(path.encode()).hexdigest()[:20], filename, source_url,
+                    fmt=ext.lstrip('.'), license=default_license, rights=list(rights or []),
+                    retrieved_at=now, content_hash=digest, size_bytes=size, attribution=attribution,
+                    license_evidence=license_evidence, source_version=source_version, rights_confirmed=confirmed)
+                text, source.fmt = extract_text(path)
+                source.language, source.quality_score = _simple_language(text), _quality_score(text)
+                source.extraction_confidence = 1.0 if source.fmt in ('text', 'code') else None
+                shingles = _shingles(text)
+                if not confirmed:
+                    quarantine(source, 'training rights and licence evidence not confirmed')
+                elif source.quality_score < 0.01:
+                    quarantine(source, 'low_quality')
+                elif digest in seen:
+                    quarantine(source, 'exact duplicate')
+                elif any(q and q.casefold() in text.casefold() for q in contamination_strings if len(q) >= 8):
+                    quarantine(source, 'held-out benchmark overlap')
+                elif len(shingles) > 10 and any(len(shingles & old) / len(shingles | old) >= .9 for old in prior_shingles):
+                    quarantine(source, 'near duplicate (5-word Jaccard >= 0.9)')
+                else:
+                    seen.add(digest)
+                    prior_shingles.append(shingles)
+            except (OSError, ValueError, UnicodeError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
+                local = os.path.relpath(path, os.getcwd())
+                source_url = path if local == '..' or local.startswith('..' + os.sep) else local
+                source = CorpusSource(hashlib.sha256(path.encode()).hexdigest()[:20], filename, source_url,
+                    fmt=ext.lstrip('.'), license=default_license, retrieved_at=now,
+                    quarantined=True, quarantine_reason=str(exc))
+            manifest.add(source)
     return manifest
 
 
-# ---------------------------------------------------------------------------
-# Candidate network sources (extensible, not exhaustive / unverified)
-# ---------------------------------------------------------------------------
+def build_training_corpus(manifest: CorpusManifest, output_path: str) -> dict:
+    """Materialize only reviewed, hash-matching local records; fail on mutation."""
+    sources = manifest.trainable()
+    if not sources:
+        raise ValueError('no reviewed trainable sources')
+    docs = []
+    for source in sources:
+        if not os.path.isfile(source.url) or os.path.islink(source.url):
+            raise ValueError(f'not a local regular source: {source.name}')
+        if sha256_file(source.url) != source.content_hash:
+            raise ValueError(f'source changed since review: {source.name}')
+        text, _ = extract_text(source.url)
+        docs.append(text.strip())
+    content = '\n\n'.join(docs) + '\n'
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    Path(output_path).write_text(content, encoding='utf-8')
+    return {'sources': len(sources), 'sha256': sha256_file(output_path), 'bytes': len(content.encode())}
 
-KNOWN_SOURCE_TEMPLATES: List[CorpusSource] = [
-    CorpusSource(
-        source_id="wikipedia_dump", name="Wikipedia content dump",
-        url="https://dumps.wikimedia.org/", fmt="xml", language="multilingual",
-        license="CC-BY-SA 3.0 / GFDL",
-        rights=[RIGHTS_DOWNLOAD, RIGHTS_TRAIN],
-        attribution="Wikimedia Foundation",
-        notes="Training permitted under CC-BY-SA with attribution; verify per-dump.",
-    ),
-    CorpusSource(
-        source_id="wikisource", name="Wikisource public-domain texts",
-        url="https://wikisource.org/", fmt="html", language="multilingual",
-        license="public domain / CC-BY-SA",
-        rights=[RIGHTS_DOWNLOAD, RIGHTS_TRAIN, RIGHTS_REDISTRIBUTE],
-        attribution="Wikimedia Foundation",
-        notes="Public-domain and freely licensed texts.",
-    ),
-    CorpusSource(
-        source_id="gutenberg", name="Project Gutenberg public-domain ebooks",
-        url="https://www.gutenberg.org/", fmt="text", language="multilingual",
-        license="public domain (US)",
-        rights=[RIGHTS_DOWNLOAD, RIGHTS_TRAIN, RIGHTS_REDISTRIBUTE],
-        attribution="Project Gutenberg",
-        notes="Confirm each item's license page; non-US public domain may differ.",
-    ),
-    CorpusSource(
-        source_id="internet_archive", name="Internet Archive texts",
-        url="https://archive.org/", fmt="text", language="multilingual",
-        license="varies", rights=[RIGHTS_DOWNLOAD],
-        notes="Many items are lending-restricted; verify per-item rights before training.",
-    ),
-]
+
+def discover_github(query: str, limit: int = 10) -> CorpusManifest:
+    """Search public repository metadata. Every hit remains quarantined until
+    a human reviews per-file rights and ingests a versioned local copy.
+    """
+    if not query.strip() or len(query) > 200 or not 1 <= limit <= 30:
+        raise ValueError('invalid query or limit')
+    url = 'https://api.github.com/search/repositories?' + urllib.parse.urlencode({'q': query, 'per_page': limit})
+    req = urllib.request.Request(url, headers={'User-Agent': 'HELIX-research', 'Accept': 'application/vnd.github+json'})
+    with urllib.request.urlopen(req, timeout=15) as response:
+        payload = json.load(response)
+    manifest = CorpusManifest()
+    for item in payload.get('items', []):
+        lic = item.get('license') or {}
+        manifest.add(CorpusSource('github-' + str(item['id']), item['full_name'], item['html_url'],
+            fmt='repository', license=lic.get('spdx_id') or 'unknown',
+            license_evidence=lic.get('url'), source_version=item.get('default_branch'),
+            retrieved_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            notes='Discovery metadata only; review individual files and pin a commit.',
+            quarantined=True, quarantine_reason='rights not reviewed'))
+    return manifest
 
 
 def discover() -> CorpusManifest:
-    """Build a manifest of candidate sources (preliminary, unverified).
-
-    Extensible: callers may append sources. Rights listed are preliminary
-    claims and are NOT sufficient for training until verified at ingest time.
-    Anything whose rights cannot be established should be quarantined.
-    """
-    manifest = CorpusManifest()
-    for t in KNOWN_SOURCE_TEMPLATES:
-        manifest.add(t)
-    return manifest
+    """Return example discovery entry points, never pre-approved datasets."""
+    result = CorpusManifest()
+    for ident, name, url in [
+        ('wikipedia_dump', 'Wikipedia dumps', 'https://dumps.wikimedia.org/'),
+        ('wikisource', 'Wikisource', 'https://wikisource.org/'),
+        ('gutenberg', 'Project Gutenberg', 'https://www.gutenberg.org/'),
+        ('internet_archive', 'Internet Archive', 'https://archive.org/'),
+    ]:
+        result.add(CorpusSource(ident, name, url, license='varies',
+            quarantined=True, quarantine_reason='individual item rights not reviewed'))
+    return result

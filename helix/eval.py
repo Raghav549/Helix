@@ -1,14 +1,14 @@
 """HELIX evaluation framework.
 
-CPU-runnable, contamination-resistant original evaluations with explicit
+CPU-runnable, small original evaluation probes with explicit
 categories: memorisation, reasoning, factual recall, code execution,
 mathematical proofs, multilingual, long-context, retrieval, tool safety,
 calibration.
 
 Every task is a hypothesis test: it reports a metric and a pass/fail against a
 configurable threshold. Results are written to a JSON report. Tasks are
-generated at eval time where possible so they cannot be memorised from the
-training corpus (contamination-resistant).
+generated at eval time where possible, but contamination and generalization
+are not guaranteed by this small probe suite.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ class EvalTask:
 
 
 # ---------------------------------------------------------------------------
-# Concrete original (contamination-resistant) tasks
+# Small original diagnostic tasks
 # ---------------------------------------------------------------------------
 
 class ArithmeticTask(EvalTask):
@@ -96,9 +96,10 @@ class ArithmeticTask(EvalTask):
             completion = generate(model, tok, prompt, max_new_tokens=8,
                                   temperature=0.0, top_k=1, device=device)
             tail = completion[len(prompt):].strip()
-            digits = "".join(ch for ch in tail if ch.isdigit())
+            import re
+            match = re.match(r"\s*(\d+)(?!\d)", tail)
             expected = str(a + b)
-            ok = bool(digits) and digits.startswith(expected)
+            ok = bool(match) and match.group(1) == expected
             correct += int(ok)
             examples.append({"a": a, "b": b, "expected": expected,
                              "completion": tail, "ok": ok})
@@ -118,11 +119,17 @@ class CodeCompletionTask(EvalTask):
         prompt = ("def is_even(n):\n    \"\"\"Return True if n is even.\"\"\"\n    return ")
         completion = generate(model, tok, prompt, max_new_tokens=12,
                               temperature=0.2, top_k=5, device=device)
-        tail = completion[len(prompt):].strip()
-        ok = ("n % 2" in tail) and ("True" in tail or "False" in tail)
+        tail = completion[len(prompt):].strip().split("\n", 1)[0]
+        # Execute generated code against independent examples, never just look
+        # for a textual substring. Fail closed if isolation is unavailable.
+        from helix.sandbox import run_python
+        code = ("def is_even(n):\n    return " + tail + "\n" +
+                "for n in range(-12, 13):\n    assert is_even(n) == (n % 2 == 0)\n")
+        execution = run_python(code, timeout_s=3)
+        ok = execution.ok
         value = 1.0 if ok else 0.0
-        return EvalResult(self.name, self.category, "heuristic_pass", value, 0.0,
-                          ok, {"completion": tail})
+        return EvalResult(self.name, self.category, "isolated_test_pass", value, 1.0,
+                          ok, {"completion": tail, "execution_error": execution.error})
 
 
 class SentenceCompletionTask(EvalTask):
@@ -138,7 +145,7 @@ class SentenceCompletionTask(EvalTask):
         tail = completion[len(prompt):].strip().lower()
         ok = "paris" in tail
         value = 1.0 if ok else 0.0
-        return EvalResult(self.name, self.category, "accuracy", value, 0.0,
+        return EvalResult(self.name, self.category, "accuracy", value, 1.0,
                           ok, {"completion": tail})
 
 
@@ -154,16 +161,24 @@ class LongContextRecallTask(EvalTask):
         haystack = "\n".join(f"filler line {i}" for i in range(filler_lines))
         context = (f"{haystack}\n{needle}\n{haystack}\n"
                    f"Question: What is the secret code?")
+        needle_ids = tok.encode(needle)
+        context_ids = tok.encode(context)
+        # A missing needle outside the supported window is not a successful
+        # long-context evaluation. Never count the echoed prompt as an answer.
+        within_window = len(context_ids) <= model.config.block_size
         completion = generate(model, tok, context, max_new_tokens=12,
                               temperature=0.0, top_k=1, device=device)
-        ok = "ALPHA-9921" in completion
+        tail = completion[len(context):] if completion.startswith(context) else completion
+        ok = within_window and "ALPHA-9921" in tail
         value = 1.0 if ok else 0.0
-        return EvalResult(self.name, self.category, "accuracy", value, 0.0,
-                          ok, {"completion": completion})
+        return EvalResult(self.name, self.category, "accuracy", value, 1.0,
+                          ok, {"completion": tail, "context_tokens": len(context_ids),
+                               "context_limit": model.config.block_size,
+                               "needle_within_window": within_window})
 
 
 class CalibrationTask(EvalTask):
-    """Calibration: a true statement should receive lower loss (higher prob)."""
+    """A small true-vs-false likelihood probe, not statistical calibration."""
 
     name = "calibration_true_vs_false"
     category = "calibration"
@@ -175,7 +190,7 @@ class CalibrationTask(EvalTask):
         def loss_for(text: str) -> float:
             ids = torch.tensor([tok.encode(text)], device=device)
             with torch.no_grad():
-                logits, loss = model(ids, ids)
+                logits, loss = model(ids[:, :-1], ids[:, 1:])
             return float(loss.item())
 
         lt = loss_for(true_stmt)
@@ -183,7 +198,7 @@ class CalibrationTask(EvalTask):
         ok = lt < lf
         value = 1.0 if ok else 0.0
         return EvalResult(self.name, self.category,
-                          "true_loss_less_than_false_loss", value, 0.0, ok,
+                          "true_loss_less_than_false_loss", value, 1.0, ok,
                           {"true_loss": round(lt, 4), "false_loss": round(lf, 4)})
 
 

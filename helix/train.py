@@ -9,6 +9,8 @@ import math
 import os
 import time
 from typing import Optional
+from dataclasses import asdict
+from contextlib import nullcontext
 
 import numpy as np
 import torch
@@ -21,7 +23,7 @@ from helix.model import HelixTransformer
 def get_lr(it: int, train_cfg) -> float:
     """Cosine learning-rate decay with linear warmup."""
     if it < train_cfg.warmup_iters:
-        return train_cfg.learning_rate * it / max(train_cfg.warmup_iters, 1)
+        return train_cfg.learning_rate * (it + 1) / max(train_cfg.warmup_iters, 1)
     if it > train_cfg.lr_decay_iters:
         return train_cfg.min_lr
     decay_ratio = (it - train_cfg.warmup_iters) / max(
@@ -65,6 +67,8 @@ def save_checkpoint(
     best_val: float,
     out_dir: str,
     tag: str,
+    config=None,
+    scaler=None,
 ) -> None:
     os.makedirs(out_dir, exist_ok=True)
     ckpt = {
@@ -72,9 +76,14 @@ def save_checkpoint(
         "optimizer": optimizer.state_dict(),
         "iter_num": iter_num,
         "best_val": best_val,
+        "torch_rng_state": torch.get_rng_state(),
+        "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+        "config": asdict(config) if config is not None else None,
+        "scaler": scaler.state_dict() if scaler is not None else {},
     }
     path = os.path.join(out_dir, f"ckpt-{tag}.pt")
-    torch.save(ckpt, path)
+    torch.save(ckpt, path + ".tmp")
+    os.replace(path + ".tmp", path)
 
 
 def load_checkpoint(
@@ -82,7 +91,7 @@ def load_checkpoint(
     model: HelixTransformer,
     optimizer: Optional[torch.optim.Optimizer] = None,
 ) -> dict:
-    ckpt = torch.load(path, map_location="cpu")
+    ckpt = torch.load(path, map_location="cpu", weights_only=True)
     model.load_state_dict(ckpt["model"])
     if optimizer is not None and "optimizer" in ckpt:
         optimizer.load_state_dict(ckpt["optimizer"])
@@ -94,13 +103,47 @@ def train(config_path: str) -> None:
     torch.manual_seed(cfg.train.seed)
     np.random.seed(cfg.train.seed)
     device = cfg.train.device
-    torch.set_num_threads(max(1, os.cpu_count() or 1))
+    from helix.runtime import configure_threads
+    configure_threads()
 
     print(f"[HELIX] device={device} threads={torch.get_num_threads()}")
 
     # ---- data ----
-    data_ok = os.path.exists(cfg.data.train_file) and os.path.exists(cfg.data.val_file)
+    if cfg.train.block_size > cfg.model.block_size:
+        raise ValueError("training block_size exceeds model context")
+    if cfg.train.dtype not in ("float32", "bfloat16", "float16"):
+        raise ValueError("dtype must be float32, bfloat16 or float16")
+    if cfg.train.dtype == "float16" and not str(device).startswith("cuda"):
+        raise ValueError("float16 training requires CUDA; use float32 or bfloat16 on CPU")
+    if min(cfg.train.batch_size, cfg.train.max_iters, cfg.train.eval_interval,
+           cfg.train.eval_iters, cfg.train.log_interval, cfg.train.gradient_accumulation_steps) < 1:
+        raise ValueError("training counts and intervals must be positive")
+    data_ok = all(os.path.exists(p) for p in (cfg.data.train_file, cfg.data.val_file,
+                                                cfg.data.vocab_file, cfg.data.merges_file))
     if data_ok:
+        # Never silently train on prepared tokens belonging to a different corpus,
+        # split, tokenizer or vocabulary target when provenance metadata exists.
+        meta_path = cfg.data.train_file + ".meta.json"
+        if os.path.isfile(meta_path):
+            import hashlib
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            if os.path.isfile(cfg.data.corpus_file):
+                with open(cfg.data.corpus_file, 'rb') as f:
+                    digest = hashlib.sha256(f.read()).hexdigest()
+                if digest != meta.get('corpus_sha256'):
+                    raise ValueError('prepared data corpus hash mismatch; rebuild the data and tokenizer')
+            if meta.get('vocab_target', cfg.model.vocab_size) != cfg.model.vocab_size or meta.get('train_fraction', cfg.data.train_frac) != cfg.data.train_frac:
+                raise ValueError('prepared data split or vocabulary target mismatch; rebuild the data and tokenizer')
+            for name, path in (('train', cfg.data.train_file), ('val', cfg.data.val_file),
+                               ('vocab', cfg.data.vocab_file), ('merges', cfg.data.merges_file)):
+                expected = meta.get('file_sha256', {}).get(name)
+                if expected:
+                    with open(path, 'rb') as f:
+                        if hashlib.sha256(f.read()).hexdigest() != expected:
+                            raise ValueError(f'prepared {name} hash mismatch; rebuild the data and tokenizer')
+        else:
+            print('[HELIX] WARNING: prepared data have no provenance metadata; verify their origin independently')
         train_ids = load_ids(cfg.data.train_file)
         val_ids = load_ids(cfg.data.val_file)
         print(
@@ -134,16 +177,25 @@ def train(config_path: str) -> None:
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[HELIX] model parameters: {n_params:,}")
     optimizer = model.configure_optimizers(cfg.train)
+    device_type = "cuda" if str(device).startswith("cuda") else "cpu"
+    autocast_dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16}.get(cfg.train.dtype)
+    scaler = torch.amp.GradScaler("cuda", enabled=(device_type == "cuda" and cfg.train.dtype == "float16"))
 
     iter_num = 0
     best_val = float("inf")
     start_time = time.time()
 
     # ---- resume ----
-    if cfg.train.resume_from and os.path.exists(cfg.train.resume_from):
+    if cfg.train.resume_from:
         ckpt = load_checkpoint(cfg.train.resume_from, model, optimizer)
         iter_num = int(ckpt.get("iter_num", 0))
         best_val = float(ckpt.get("best_val", best_val))
+        if ckpt.get("torch_rng_state") is not None:
+            torch.set_rng_state(ckpt["torch_rng_state"])
+        if device_type == "cuda" and ckpt.get("cuda_rng_state"):
+            torch.cuda.set_rng_state_all(ckpt["cuda_rng_state"])
+        if ckpt.get("scaler"):
+            scaler.load_state_dict(ckpt["scaler"])
         print(f"[HELIX] resumed from {cfg.train.resume_from} at iter {iter_num}")
 
     log_path = os.path.join(cfg.train.out_dir, "log.jsonl")
@@ -168,13 +220,19 @@ def train(config_path: str) -> None:
                 cfg.train.block_size,
                 device,
             )
-            _, loss = model(X, Y)
-            loss = loss / max(1, cfg.train.gradient_accumulation_steps)
-            loss.backward()
+            with (torch.autocast(device_type=device_type, dtype=autocast_dtype)
+                  if autocast_dtype is not None else nullcontext()):
+                _, loss = model(X, Y)
+                loss = loss / cfg.train.gradient_accumulation_steps
+            if not torch.isfinite(loss):
+                raise RuntimeError(f"non-finite loss at iteration {iter_num}")
+            scaler.scale(loss).backward()
             running_loss += loss.item()
 
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         optimizer.zero_grad(set_to_none=True)
         iter_num += 1
 
@@ -203,16 +261,23 @@ def train(config_path: str) -> None:
 
             if vals["val"] < best_val:
                 best_val = vals["val"]
-                save_checkpoint(model, optimizer, iter_num, best_val, cfg.train.out_dir, "best")
+                save_checkpoint(model, optimizer, iter_num, best_val, cfg.train.out_dir, "best", cfg, scaler)
 
         if cfg.train.save_interval and iter_num % cfg.train.save_interval == 0:
-            save_checkpoint(model, optimizer, iter_num, best_val, cfg.train.out_dir, f"iter{iter_num}")
+            save_checkpoint(model, optimizer, iter_num, best_val, cfg.train.out_dir, f"iter{iter_num}", cfg, scaler)
 
     # final checkpoint
-    save_checkpoint(model, optimizer, iter_num, best_val, cfg.train.out_dir, "final")
+    save_checkpoint(model, optimizer, iter_num, best_val, cfg.train.out_dir, "final", cfg, scaler)
     total = time.time() - start_time
     print(f"[HELIX] training done in {total:.1f}s. best_val={best_val:.4f}")
     print(f"[HELIX] artifacts in {cfg.train.out_dir}/")
+    metrics = {"stage": "pretraining", "initialization": "random" if not cfg.train.resume_from else "resume",
+               "config": asdict(cfg), "parameters": n_params, "iterations": iter_num,
+               "train_tokens_processed": iter_num * cfg.train.batch_size * cfg.train.block_size * cfg.train.gradient_accumulation_steps,
+               "best_validation_loss": best_val, "elapsed_s": round(total, 4)}
+    with open(os.path.join(cfg.train.out_dir, "metrics.json"), "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2)
+    return metrics
 
 
 if __name__ == "__main__":

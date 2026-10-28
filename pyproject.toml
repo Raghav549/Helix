@@ -1,21 +1,32 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=68.0", "wheel>=0.43"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "helix"
-version = "0.1.0"
-description = "HELIX: an open-source, research-grade, CPU-first AI system trained from random initialization."
+name = "helix-research"
+version = "0.13.0"
+description = "CPU-first, from-scratch AI research platform"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
-    "numpy",
-    "torch",
+    "numpy>=1.24,<3",
+    "torch>=2.5,<3",
+    "Pillow>=10,<12",
+    "Flask>=3,<4",
+    "sympy>=1.12,<2",
+    "matplotlib>=3.8,<4"
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+pdf = ["pypdf>=5,<7"]
 
 [project.scripts]
 helix = "helix.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["helix*"]
+
+[tool.setuptools.package-data]
+helix = ["static/*"]

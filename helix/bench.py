@@ -53,11 +53,12 @@ def detect_hardware() -> HardwareSpec:
     """Detect local hardware without assuming any accelerator exists."""
     import torch as _torch
 
+    from helix.runtime import available_threads
     cpu_count = os.cpu_count() or 1
     try:
         import os as _os
         # logical vs physical on Linux
-        physical = len(_os.sched_getaffinity(0)) if hasattr(_os, "sched_getaffinity") else cpu_count
+        physical = available_threads()  # usable logical threads, not physical cores
     except Exception:
         physical = cpu_count
 
@@ -200,7 +201,8 @@ def bench_forward_backward(
             loss.backward()
             opt.zero_grad(set_to_none=True)
 
-        torch.cpu.synchronize() if hasattr(torch, "cpu") else None
+        if str(device).startswith("cuda"):
+            torch.cuda.synchronize()
         t0 = time.perf_counter()
         total_tokens = 0
         for _ in range(iters):
@@ -437,6 +439,7 @@ def run_bench(
     config_path: str,
     out_path: str = "out/bench-report.json",
     block_sizes: Optional[List[int]] = None,
+    checkpoint_path: Optional[str] = None,
 ) -> BenchReport:
     cfg = load_config(config_path)
     hardware = detect_hardware()
@@ -471,8 +474,11 @@ def run_bench(
         with open(cfg.data.vocab_file, encoding="utf-8") as f:
             cfg.model.vocab_size = len(_json.load(f)["vocab"])
 
-    device = hardware.device
+    device = cfg.train.device
     model = _make_model(cfg, device)
+    if checkpoint_path:
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        model.load_state_dict(ckpt.get("model", ckpt))
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[bench] model parameters: {n_params:,}")
 
@@ -480,6 +486,7 @@ def run_bench(
         "model": asdict(cfg.model),
         "train": asdict(cfg.train),
         "data": asdict(cfg.data),
+        "checkpoint": checkpoint_path or "random initialization",
     })
 
     blocks = block_sizes or [64, 128, 256]

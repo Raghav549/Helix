@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/sympy/sympy",
+  "commit": "5b861e4c4a06d56bac4b3f1398985416ae6ec6c7",
+  "files": [
+    "LICENSE",
+    "doc/src/tutorials/intro-tutorial/intro.rst",
+    "doc/src/tutorials/intro-tutorial/basic_operations.rst",
+    "doc/src/tutorials/intro-tutorial/calculus.rst",
+    "doc/src/tutorials/intro-tutorial/solvers.rst",
+    "doc/src/tutorials/intro-tutorial/matrices.rst"
+  ],
+  "retrieved": "2026-10-28",
+  "license_file": "LICENSE"
+}

@@ -45,6 +45,15 @@ class ImageUnderstandingConfig:
     seed: int = 1337
     device: str = "cpu"
 
+    def __post_init__(self):
+        if min(self.image_size, self.image_channels, self.patch_size, self.vit_dim, self.vit_layers,
+               self.vit_heads, self.vit_mlp_dim, self.max_image_tokens) < 1:
+            raise ValueError("vision dimensions must be positive")
+        if self.image_size % self.patch_size or self.vit_dim % self.vit_heads:
+            raise ValueError("image_size must divide into patches and vit_dim into heads")
+        if not 0 <= self.vit_dropout < 1:
+            raise ValueError("vision dropout must be in [0, 1)")
+
 
 class PatchEmbedding(nn.Module):
     def __init__(self, image_size: int, patch_size: int, in_ch: int, dim: int) -> None:
@@ -135,12 +144,16 @@ class MultimodalHelix(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         device = input_ids.device
         B, T = input_ids.shape
+        if T < 1 or T > self.llm_config.block_size:
+            raise ValueError("text context exceeds model window")
         text_emb = self.llm.tok_emb(input_ids)
         seq = text_emb
         if images is not None:
             vit_out = self.vision(images)
             img_emb = self.projector(vit_out)
-            max_tok = min(self.vision_config.max_image_tokens, img_emb.size(1))
+            max_tok = min(self.vision_config.max_image_tokens, img_emb.size(1), self.llm_config.block_size - T)
+            if max_tok < 1:
+                raise ValueError("no context space left for image tokens")
             img_emb = img_emb[:, :max_tok, :]
             seq = torch.cat([img_emb, text_emb], dim=1)
         x = self.llm.drop(seq)
@@ -160,7 +173,7 @@ class MultimodalHelix(nn.Module):
         else:
             text_start = 0
         text_h = x[:, text_start:, :]
-        logits = F.linear(text_h, self.llm.tok_emb.weight)
+        logits = F.linear(text_h, self.llm.tok_emb.weight) if self.llm.config.weight_tying else self.llm.lm_head(text_h)
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
@@ -176,17 +189,19 @@ class MultimodalHelix(nn.Module):
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
         device: str = "cpu",
+        eos_token_id: Optional[int] = None,
     ) -> torch.Tensor:
         self.eval()
         img_emb = None
         if images is not None:
             vit_out = self.vision(images)
             img_emb = self.projector(vit_out)
-            max_tok = min(self.vision_config.max_image_tokens, img_emb.size(1))
+            max_tok = min(self.vision_config.max_image_tokens, img_emb.size(1), self.llm_config.block_size - 1)
             img_emb = img_emb[:, :max_tok, :]
         idx = input_ids.clone()
         for _ in range(max_new_tokens):
-            text_emb = self.llm.tok_emb(idx)
+            text_capacity = self.llm_config.block_size - (img_emb.size(1) if img_emb is not None else 0)
+            text_emb = self.llm.tok_emb(idx[:, -text_capacity:])
             if img_emb is not None:
                 seq = torch.cat([img_emb.expand(idx.size(0), -1, -1), text_emb], dim=1)
             else:
@@ -199,7 +214,7 @@ class MultimodalHelix(nn.Module):
             x = self.llm.norm_f(x)
             text_start = img_emb.size(1) if img_emb is not None else 0
             text_h = x[:, text_start:, :]
-            logits = F.linear(text_h, self.llm.tok_emb.weight)
+            logits = F.linear(text_h, self.llm.tok_emb.weight) if self.llm.config.weight_tying else self.llm.lm_head(text_h)
             logits = logits[:, -1, :] / max(temperature, 1e-6)
             if top_k is not None and top_k > 0:
                 top_k = min(top_k, logits.size(-1))
@@ -220,6 +235,8 @@ class MultimodalHelix(nn.Module):
             probs = F.softmax(logits, dim=-1)
             next_id = torch.multinomial(probs, num_samples=1)
             idx = torch.cat([idx, next_id], dim=1)
+            if eos_token_id is not None and bool((next_id == eos_token_id).all()):
+                break
         return idx
 
 
@@ -239,7 +256,8 @@ def train_image_understanding(
     import numpy as np
     np.random.seed(config.seed)
     device = config.device
-    torch.set_num_threads(max(1, os.cpu_count() or 1))
+    from helix.runtime import configure_threads
+    configure_threads()
     model = MultimodalHelix(llm_config, config).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     N = images.size(0)
@@ -290,7 +308,7 @@ def load_multimodal_model(
     device: str = "cpu",
 ):
     model = MultimodalHelix(llm_config, vision_config).to(device)
-    state = torch.load(ckpt_path, map_location=device)
+    state = torch.load(ckpt_path, map_location=device, weights_only=True)
     model.load_state_dict(state)
     model.eval()
     return model

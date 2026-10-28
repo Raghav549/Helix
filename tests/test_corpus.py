@@ -14,7 +14,7 @@ def test_scan_directory_creates_manifest(tmp_path):
         "hello world this is a test document about science and reasoning"
     )
     (tmp_path / "b.py").write_text("def add(a, b):\n    return a + b\n")
-    m = scan_directory(str(tmp_path))
+    m = scan_directory(str(tmp_path), rights=[RIGHTS_TRAIN], default_license="MIT", license_evidence="LICENSE")
     assert m.summary()["total"] >= 2
     trainable = m.trainable()
     assert len(trainable) >= 1
@@ -57,6 +57,7 @@ def test_manifest_roundtrip(tmp_path):
     m = CorpusManifest()
     s = CorpusSource(source_id="s1", name="n", url="u",
                      rights=[RIGHTS_TRAIN, RIGHTS_REDISTRIBUTE],
+                     license="MIT", license_evidence="LICENSE", rights_confirmed=True, content_hash="abc",
                      quality_score=0.9)
     m.add(s)
     path = tmp_path / "manifest.json"

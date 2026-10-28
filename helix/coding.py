@@ -9,8 +9,7 @@ Independently implemented. Provides repository-level coding capabilities:
   * LLM-assisted explanation, bug finding, and fixing
 
 Designed for CPU-first operation; the LLM assists but real compiler/interpreter
-feedback and static analysis drive correctness. Least-privilege: execution is
-sandboxed, time- and memory-bounded, no network assumed.
+feedback and static analysis drive correctness. Execution uses a fail-closed Linux namespace/seccomp sandbox with resource limits.
 """
 
 from __future__ import annotations
@@ -19,8 +18,10 @@ import ast
 import difflib
 import json
 import os
-import subprocess
 import tempfile
+import hashlib
+from pathlib import Path
+import re
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
@@ -92,17 +93,34 @@ class RepoInspector:
                  ".yml", ".cfg", ".ini"}
 
     def __init__(self, root: str) -> None:
-        self.root = os.path.abspath(root)
+        self.root = os.path.realpath(root)
+
+    def _safe_path(self, rel_path: str) -> str:
+        if not rel_path or os.path.isabs(rel_path):
+            raise ValueError("path must be relative to the repository")
+        parts = Path(rel_path).parts
+        sensitive = {".git", ".env", ".ssh", ".aws", ".kube", ".gnupg", ".netrc", ".npmrc", ".pypirc",
+                     ".git-credentials", "credentials.json", "service-account.json", "id_rsa", "id_ed25519"}
+        if any(part.lower() in sensitive or part.lower().startswith(".env.") for part in parts):
+            raise ValueError("sensitive path is not readable")
+        full = os.path.realpath(os.path.join(self.root, rel_path))
+        if os.path.commonpath((self.root, full)) != self.root:
+            raise ValueError("path escapes repository")
+        return full
 
     def list_files(self, max_files: int = 200) -> List[str]:
         files: List[str] = []
         for root, dirs, names in os.walk(self.root):
             # skip common non-source dirs
-            dirs[:] = [d for d in dirs if d not in {".git", "__pycache__",
-                                                    ".venv", "node_modules",
-                                                    "build", "dist", ".idea"}]
+            dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", ".venv", "node_modules",
+                                                    "build", "dist", ".idea", ".ssh", ".aws", ".kube", ".gnupg"}
+                       and not os.path.islink(os.path.join(root, d))]
             for n in sorted(names):
                 ext = os.path.splitext(n)[1].lower()
+                if (os.path.islink(os.path.join(root, n)) or n.lower() in
+                        {".env", ".netrc", ".npmrc", ".pypirc", ".git-credentials", "credentials.json", "service-account.json", "id_rsa", "id_ed25519"}
+                        or n.lower().startswith(".env.")):
+                    continue
                 if ext in self.CODE_EXTS or n.lower() in {
                     "makefile", "dockerfile", "readme", "license", "changelog",
                 }:
@@ -112,9 +130,11 @@ class RepoInspector:
         return files
 
     def read_file(self, rel_path: str) -> Optional[str]:
-        full = os.path.join(self.root, rel_path)
+        full = self._safe_path(rel_path)
         if not os.path.isfile(full):
             return None
+        if os.path.getsize(full) > 1024 * 1024:
+            raise ValueError("file exceeds 1 MiB read limit")
         try:
             with open(full, "r", encoding="utf-8", errors="replace") as f:
                 return f.read()
@@ -122,7 +142,7 @@ class RepoInspector:
             return None
 
     def file_info(self, rel_path: str) -> Optional[FileInfo]:
-        full = os.path.join(self.root, rel_path)
+        full = self._safe_path(rel_path)
         if not os.path.isfile(full):
             return None
         text = self.read_file(rel_path)
@@ -231,33 +251,46 @@ class PatchGenerator:
         return Patch(original, modified, diff)
 
     def apply_patch(self, original: str, diff: str) -> str:
-        # Minimal unified-diff apply (additions only, context lines must match).
-        out: List[str] = []
-        orig_lines = original.splitlines(keepends=True)
-        diff_lines = diff.splitlines(keepends=True)
-        i = 0
-        oi = 0
-        while i < len(diff_lines):
-            line = diff_lines[i]
-            if line.startswith("---") or line.startswith("+++") or line.startswith("@@"):
+        """Apply a unified diff in memory, rejecting stale/malformed hunks."""
+        if diff == "# No changes\n":
+            return original
+        lines = diff.splitlines(keepends=True)
+        if len(lines) < 2 or not lines[0].startswith("--- ") or not lines[1].startswith("+++ "):
+            raise ValueError("invalid unified diff headers")
+        orig = original.splitlines(keepends=True)
+        result, oi, i = [], 0, 2
+        header = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+        seen = False
+        while i < len(lines):
+            match = header.match(lines[i])
+            if not match:
+                raise ValueError("invalid hunk header")
+            seen = True
+            old_start, old_count = int(match[1]), int(match[2] or 1)
+            new_count = int(match[4] or 1)
+            start = old_start - 1 if old_count else old_start
+            if start < oi or start > len(orig):
+                raise ValueError("overlapping or out-of-range hunk")
+            result.extend(orig[oi:start]); oi = start
+            i += 1; consumed = produced = 0
+            while i < len(lines) and not lines[i].startswith("@@ "):
+                line = lines[i]
+                if not line or line[0] not in " +-":
+                    raise ValueError("invalid hunk line")
+                marker, content = line[0], line[1:]
+                if marker in " -":
+                    if oi >= len(orig) or orig[oi] != content:
+                        raise ValueError("patch context does not match original")
+                    oi += 1; consumed += 1
+                if marker in " +":
+                    result.append(content); produced += 1
                 i += 1
-                continue
-            if line.startswith(" "):
-                if oi < len(orig_lines):
-                    out.append(orig_lines[oi]); oi += 1
-                i += 1
-            elif line.startswith("-"):
-                oi += 1  # skip original line
-                i += 1
-            elif line.startswith("+"):
-                out.append(line[1:])
-                i += 1
-            else:
-                i += 1
-        # append any remaining original lines
-        while oi < len(orig_lines):
-            out.append(orig_lines[oi]); oi += 1
-        return "".join(out)
+            if consumed != old_count or produced != new_count:
+                raise ValueError("hunk line counts do not match header")
+        if not seen:
+            raise ValueError("no patch hunks")
+        result.extend(orig[oi:])
+        return "".join(result)
 
 
 # ---------------------------------------------------------------------------
@@ -266,29 +299,20 @@ class PatchGenerator:
 
 class TestGenerator:
     def generate_tests(self, filename: str, source: str) -> str:
-        analyzer = StaticAnalyzer(source, filename)
-        result = analyzer.analyze()
-        lines: List[str] = [
-            "import unittest",
-            "",
-        ]
-        for sym in result.symbols:
-            if sym.kind == "function":
-                args = ", ".join(sym.args) if sym.args else ""
-                lines.append(
-                    f"class Test{sym.name.capitalize()}(unittest.TestCase):"
-                )
-                lines.append(f"    def test_{sym.name}(self):")
-                lines.append(f"        # TODO: add assertions for {sym.name}({args})")
-                lines.append(f"        self.assertTrue(True)")
-                lines.append("")
-        if not any(s.kind == "function" for s in result.symbols):
-            lines.append("class TestPlaceholder(unittest.TestCase):")
-            lines.append("    def test_placeholder(self):")
-            lines.append("        self.assertTrue(True)")
-            lines.append("")
-        lines.append("if __name__ == '__main__':")
-        lines.append("    unittest.main()")
+        """Generate honest import/callable smoke checks, not fake correctness tests."""
+        tree = ast.parse(source, filename=filename)
+        functions = [node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        lines = ["import importlib.util", "import pathlib", "import unittest", "",
+                 f"_path = pathlib.Path(__file__).parent / {filename!r}",
+                 "_spec = importlib.util.spec_from_file_location('_helix_target', _path)",
+                 "module = importlib.util.module_from_spec(_spec)",
+                 "_spec.loader.exec_module(module)", "",
+                 "class TestImports(unittest.TestCase):",
+                 "    def test_module_imports(self):", "        self.assertIsNotNone(module)"]
+        for name in functions:
+            lines += [f"    def test_{name}_is_callable(self):",
+                      f"        self.assertTrue(callable(module.{name}))"]
+        lines += ["", "if __name__ == '__main__':", "    unittest.main()", ""]
         return "\n".join(lines)
 
 
@@ -316,16 +340,18 @@ class CodingAgent:
             return None
         return StaticAnalyzer(source, rel_path).analyze()
 
-    def execute_code(self, code: str) -> ExecutionResult:
+    def execute_code(self, code: str, *, approved: bool = False) -> ExecutionResult:
+        if approved is not True:
+            return ExecutionResult(False, "", "explicit execution approval required", 0.0)
         result = self.executor.execute(code=code)
         return ExecutionResult(result.ok, result.output, result.error,
                                result.duration_s)
 
-    def run_python_file(self, rel_path: str) -> ExecutionResult:
+    def run_python_file(self, rel_path: str, *, approved: bool = False) -> ExecutionResult:
         source = self.read_file(rel_path)
         if source is None:
             return ExecutionResult(False, "", f"file not found: {rel_path}", 0.0)
-        return self.execute_code(source)
+        return self.execute_code(source, approved=approved)
 
     def generate_patch(self, rel_path: str, modified: str) -> Optional[Patch]:
         original = self.read_file(rel_path)
@@ -336,6 +362,30 @@ class CodingAgent:
     def apply_patch(self, rel_path: str, diff: str) -> str:
         original = self.read_file(rel_path) or ""
         return PatchGenerator().apply_patch(original, diff)
+
+    def apply_patch_to_repo(self, rel_path: str, diff: str, expected_sha256: str,
+                            *, approved: bool = False) -> str:
+        """Write a verified patch only with explicit approval and a fresh hash."""
+        if approved is not True:
+            raise PermissionError("repository modification requires explicit approval")
+        path = self.inspector._safe_path(rel_path)
+        original = self.read_file(rel_path)
+        if original is None:
+            raise FileNotFoundError(rel_path)
+        actual = hashlib.sha256(original.encode("utf-8")).hexdigest()
+        if actual != expected_sha256:
+            raise ValueError("file changed since patch was proposed")
+        modified = PatchGenerator().apply_patch(original, diff)
+        fd, temp = tempfile.mkstemp(prefix=".helix-patch-", dir=os.path.dirname(path))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(modified)
+            os.chmod(temp, os.stat(path).st_mode & 0o777)
+            os.replace(temp, path)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+        return hashlib.sha256(modified.encode("utf-8")).hexdigest()
 
     def generate_tests(self, rel_path: str) -> Optional[str]:
         source = self.read_file(rel_path)
@@ -352,14 +402,13 @@ class CodingAgent:
         }
 
 
-def demo_code_fix(code: str) -> dict:
+def demo_code_fix(code: str, *, approved: bool = False) -> dict:
     """Demonstrate static analysis + execution feedback on a snippet."""
     analyzer = StaticAnalyzer(code, "<snippet>")
     result = analyzer.analyze()
     exec_result = None
-    if not result.has_syntax_error():
-        # append a print of a result variable if present
-        exec_result = CodingAgent().execute_code(code + "\n")
+    if not result.has_syntax_error() and approved is True:
+        exec_result = CodingAgent().execute_code(code + "\n", approved=True)
     return {
         "analysis": asdict(result),
         "execution": asdict(exec_result) if exec_result else None,

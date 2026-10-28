@@ -19,6 +19,7 @@ htmlcov/
 out/
 data/*.bin
 data/*.npy
+data/*.npy.meta.json
 data/vocab.json
 data/merges.json
 checkpoints/
@@ -27,3 +28,8 @@ checkpoints/
 # OS
 .DS_Store
 Thumbs.db
+
+# Python packaging output
+*.egg-info/
+build/
+dist/

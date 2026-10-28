@@ -1,11 +1,7 @@
 """HELIX command-line interface.
 
-Subcommands:
-  train    - train from random initialization (CPU baseline)
-  generate - generate text from a prompt
-  chat     - interactive chat
-  serve    - tiny local HTTP generation server (stdlib)
-  eval     - report validation perplexity from a checkpoint
+Run ``python -m helix --help`` to see training, inference, evaluation,
+image/vision, research, coding, corpus and local web commands.
 """
 
 from __future__ import annotations
@@ -89,18 +85,22 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
     cfg = load_config(args.config)
     model, tok, cfg = load_model_and_tokenizer(args.config, args.checkpoint)
-    val_ids = load_ids(cfg.data.val_file)
+    if args.eval_iters < 1:
+        raise ValueError("eval-iters must be positive")
+    train_ids, val_ids = load_ids(cfg.data.train_file), load_ids(cfg.data.val_file)
+    batch_rng = torch.Generator().manual_seed(args.seed)
     losses = []
     model.eval()
     with torch.no_grad():
         for _ in range(args.eval_iters):
             X, Y = get_batch(
                 "val",
-                np.load(cfg.data.train_file),
+                train_ids,
                 val_ids,
                 cfg.train.batch_size,
                 cfg.train.block_size,
                 cfg.train.device,
+                generator=batch_rng,
             )
             _, loss = model(X, Y)
             losses.append(loss.item())
@@ -114,12 +114,22 @@ def cmd_eval(args: argparse.Namespace) -> int:
         tasks = [t.strip() for t in args.eval_tasks.split(",") if t.strip()]
     try:
         from helix.eval import run_eval
+        import json
+        torch.manual_seed(args.seed)
         report = run_eval(args.config, args.checkpoint, args.out_path, tasks=tasks,
                           device=cfg.train.device)
-        print(f"[eval] report: {report.summary()['passed']}/{report.summary()['total']} "
+        summary = report.summary()
+        summary["validation"] = {"loss": avg, "perplexity": math.exp(avg),
+                                 "batches": args.eval_iters, "batch_size": cfg.train.batch_size,
+                                 "block_size": cfg.train.block_size, "seed": args.seed,
+                                 "note": "sampled held-out token windows; not a general capability benchmark"}
+        with open(args.out_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+        print(f"[eval] report: {summary['passed']}/{summary['total']} "
               f"tasks passed -> {args.out_path}")
-    except Exception as exc:  # pragma: no cover - eval harness is best-effort
-        print(f"[eval] task-suite skipped: {exc}")
+    except Exception as exc:  # pragma: no cover - errors must not masquerade as success
+        print(f"[eval] task-suite failed: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -180,7 +190,8 @@ def cmd_bench(args: argparse.Namespace) -> int:
     from helix.bench import run_bench
 
     run_bench(args.config, args.out_path,
-              block_sizes=[int(s) for s in args.block_sizes.split(",") if s.strip()])
+              block_sizes=[int(s) for s in args.block_sizes.split(",") if s.strip()],
+              checkpoint_path=args.checkpoint)
     return 0
 
 
@@ -218,7 +229,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
     reg = ToolRegistry.default_registry()
     agent = Agent(model, tok, registry=reg, device=cfg.train.device,
                   max_steps=args.max_steps, max_time_s=args.max_time,
-                  require_approval=not args.no_approval)
+                  require_approval=True)
     run = agent.run(args.goal)
     print(f"Agent goal: {run.goal}")
     print(f"Stopped: {run.stopped_reason}  steps={len(run.steps)}  "
@@ -245,10 +256,177 @@ def cmd_web(args: argparse.Namespace) -> int:
     if args.image_gen_checkpoint: argv += ["--image-gen-checkpoint", args.image_gen_checkpoint]
     if args.vision_config: argv += ["--vision-config", args.vision_config]
     if args.vision_checkpoint: argv += ["--vision-checkpoint", args.vision_checkpoint]
+    if args.caption_dir: argv += ["--caption-dir", args.caption_dir]
+    if args.external_origin is not None: argv += ["--external-origin", args.external_origin]
     argv += ["--host", args.host, "--port", str(args.port)]
     _sys.argv = ["helix"] + argv  # drop consumed "web" token
     return web_main()
 
+
+
+def cmd_doctor(args):
+    import json
+    import importlib.metadata as metadata
+    from helix.bench import detect_hardware
+    from helix.sandbox import run_python
+    packages = {}
+    for name in ("torch", "numpy", "Pillow", "Flask", "sympy", "matplotlib", "pypdf"):
+        try:
+            packages[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            packages[name] = None
+    probe = run_python("result = 6 * 7", timeout_s=5)
+    print(json.dumps({"hardware": detect_hardware().to_dict(), "packages": packages,
+                      "sandbox_available": probe.ok, "sandbox_error": probe.error}, indent=2))
+    return 0 if probe.ok else 1
+
+
+def cmd_corpus_scan(args):
+    import json
+    from helix.corpus import scan_directory, RIGHTS_TRAIN, RIGHTS_REDISTRIBUTE
+    rights = []
+    if args.allow_training: rights.append(RIGHTS_TRAIN)
+    if args.allow_redistribution: rights.append(RIGHTS_REDISTRIBUTE)
+    heldout = ()
+    if args.heldout:
+        with open(args.heldout, encoding="utf-8") as f:
+            heldout = tuple(line.strip() for line in f if line.strip())
+    m = scan_directory(args.directory, rights=rights, default_license=args.license,
+                       license_evidence=args.evidence, source_version=args.version,
+                       attribution=args.attribution, contamination_strings=heldout)
+    m.save(args.manifest)
+    print(json.dumps(m.summary(), indent=2))
+    return 0
+
+
+def cmd_corpus_build(args):
+    import json
+    from helix.corpus import CorpusManifest, build_training_corpus
+    print(json.dumps(build_training_corpus(CorpusManifest.load(args.manifest), args.output), indent=2))
+    return 0
+
+
+def cmd_corpus_search(args):
+    import json
+    from helix.corpus import discover_github
+    m = discover_github(args.query, args.limit)
+    m.save(args.manifest)
+    print(json.dumps(m.summary(), indent=2))
+    print("All search results are quarantined pending per-file rights review.")
+    return 0
+
+
+def cmd_image_train(args):
+    import json
+    from dataclasses import asdict
+    import torch
+    from helix.image_gen import ImageGenConfig, train_image_gen, load_image_gen_model
+    from helix.image_workflow import train_synthetic_image_pipeline, load_image_manifest, diffusion_loss
+    if args.synthetic:
+        train_synthetic_image_pipeline(args.config, args.out_dir, args.count, args.val_count)
+        return 0
+    raw = json.load(open(args.config, encoding="utf-8"))
+    config = ImageGenConfig(**raw.get("image_gen", raw))
+    if not config.use_text_conditioning:
+        raise ValueError("image manifest training requires a text-conditioned config")
+    images, captions, report = load_image_manifest(args.manifest, config.image_size)
+    if len(images) < 2:
+        raise ValueError("at least two reviewed images are required for a holdout")
+    order = torch.randperm(len(images), generator=torch.Generator().manual_seed(config.seed)).tolist()
+    holdout = max(1, len(images) // 10)
+    val_i, train_i = order[:holdout], order[holdout:]
+    train_caps, val_caps = [captions[i] for i in train_i], [captions[i] for i in val_i]
+    metrics = train_image_gen(config, images[train_i], out_dir=args.out_dir, captions=train_caps)
+    model = load_image_gen_model(config, os.path.join(args.out_dir, "ckpt-final.pt"), config.device)
+    metrics["heldout_loss"] = diffusion_loss(model, images[val_i].to(config.device), val_caps, config.seed + 3)
+    metrics["data_review"] = report
+    metrics["train_records"] = train_i
+    metrics["heldout_records"] = val_i
+    with open(os.path.join(args.out_dir, "config.json"), "w", encoding="utf-8") as f:
+        json.dump({"image_gen": asdict(config)}, f, indent=2)
+    with open(os.path.join(args.out_dir, "metrics.json"), "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2)
+    print(json.dumps(metrics["heldout_loss"], indent=2))
+    return 0
+
+
+def cmd_image_generate(args):
+    import json
+    from helix.image_workflow import generate_to_file
+    print(json.dumps(generate_to_file(args.config, args.checkpoint, args.prompt, args.output,
+                                     args.seed, args.init_image, args.strength), indent=2))
+    return 0
+
+
+def cmd_scene(args):
+    import json
+    from helix.physics import scene_from_prompt, render_scene
+    im, info = render_scene(scene_from_prompt(args.prompt, args.size))
+    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+    im.save(args.output)
+    print(json.dumps({"path": args.output, **info}, indent=2))
+    return 0
+
+
+def cmd_vision_train(args):
+    from helix.visual import train_visual
+    train_visual(args.out_dir, train_count=args.count, val_count=args.val_count,
+                 steps=args.steps, batch_size=args.batch_size, seed=args.seed)
+    return 0
+
+
+def cmd_image_analyze(args):
+    import json
+    from PIL import Image
+    from helix.visual import load_visual, inspect_image
+    model = load_visual(args.checkpoint) if args.checkpoint else None
+    with Image.open(args.image) as im:
+        result = inspect_image(im, model)
+        if args.caption:
+            from helix.caption_workflow import load_captioner, describe_image
+            captioner, tokenizer = load_captioner(args.caption_dir)
+            result["synthetic_domain_caption"] = describe_image(captioner, tokenizer, im)
+            result["caption_warning"] = "Trained on synthetic primitives only; not a natural-image description."
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_caption_train(args):
+    from helix.caption_workflow import train_captioner
+    train_captioner(steps=args.steps, batch_size=args.batch_size, out_dir=args.out_dir,
+                    base_checkpoint=args.base_checkpoint)
+    return 0
+
+
+def cmd_visual_eval(args):
+    import json
+    from helix.visual_eval import compare_physics
+    report = compare_physics(args.config, args.image_checkpoint, args.vision_checkpoint,
+                             args.out_path, args.seed)
+    print(json.dumps(report["results"], indent=2))
+    return 0
+
+
+def cmd_research(args):
+    import json
+    from helix.research import run_bounded_math
+    result = run_bounded_math(args.operation, args.expression, args.variable, args.point)
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("ok") else 1
+
+
+def cmd_code_run(args):
+    import json
+    from helix.sandbox import run_python
+    if not args.approve:
+        print("Execution requires --approve", file=sys.stderr)
+        return 2
+    with open(args.file, encoding="utf-8") as f:
+        code = f.read()
+    from dataclasses import asdict
+    result = run_python(code, timeout_s=args.timeout)
+    print(json.dumps(asdict(result), indent=2))
+    return 0 if result.ok else 1
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="helix", description="HELIX CLI")
@@ -259,8 +437,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_train.set_defaults(func=cmd_train)
 
     p_gen = sub.add_parser("generate", help="generate text from a prompt")
-    p_gen.add_argument("--config", required=True)
-    p_gen.add_argument("--checkpoint", required=True)
+    p_gen.add_argument("--config", default="configs/helix-research.json")
+    p_gen.add_argument("--checkpoint", default="artifacts/sft/sckpt-best.pt")
     p_gen.add_argument("--prompt", default="The helix is")
     p_gen.add_argument("--max-new-tokens", type=int, default=50)
     p_gen.add_argument("--temperature", type=float, default=0.8)
@@ -279,14 +457,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_gen.set_defaults(func=cmd_generate)
 
     p_chat = sub.add_parser("chat", help="interactive chat")
-    p_chat.add_argument("--config", required=True)
-    p_chat.add_argument("--checkpoint", required=True)
+    p_chat.add_argument("--config", default="configs/helix-research.json")
+    p_chat.add_argument("--checkpoint", default="artifacts/sft/sckpt-best.pt")
     p_chat.set_defaults(func=cmd_chat)
 
     p_eval = sub.add_parser("eval", help="validation loss / perplexity")
     p_eval.add_argument("--config", required=True)
     p_eval.add_argument("--checkpoint", required=True)
     p_eval.add_argument("--eval-iters", type=int, default=50)
+    p_eval.add_argument("--seed", type=int, default=1337)
     p_eval.add_argument("--out-path", default="out/eval-report.json",
                         help="path to write the JSON evaluation report")
     p_eval.add_argument("--eval-tasks", default=None,
@@ -302,6 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bench = sub.add_parser("bench", help="CPU benchmark: throughput, latency, RAM, scaling")
     p_bench.add_argument("--config", default="configs/helix-tiny.json")
     p_bench.add_argument("--out-path", default="out/bench-report.json")
+    p_bench.add_argument("--checkpoint", default=None, help="trained checkpoint (default: random weights)")
     p_bench.add_argument("--block-sizes", default="64,128,256",
                          help="comma-separated context lengths to benchmark")
     p_bench.set_defaults(func=cmd_bench)
@@ -330,22 +510,118 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent.add_argument("--goal", required=True, help="task goal for the agent")
     p_agent.add_argument("--max-steps", type=int, default=6)
     p_agent.add_argument("--max-time", type=float, default=60.0)
-    p_agent.add_argument("--no-approval", action="store_true",
-                         help="auto-approve consequential tools (demo only)")
     p_agent.add_argument("--audit-log", default="out/agent-audit.json",
                          help="path to write the audit log")
     p_agent.set_defaults(func=cmd_agent)
 
     p_web = sub.add_parser("web", help="local integrated web UI (chat, images, code, research)")
-    p_web.add_argument("--config", default="configs/helix-tiny.json")
-    p_web.add_argument("--checkpoint", default="out/tiny-run/ckpt-best.pt")
+    p_web.add_argument("--config", default="configs/helix-research.json")
+    p_web.add_argument("--checkpoint", default="artifacts/sft/sckpt-best.pt")
     p_web.add_argument("--image-gen-config", default=None)
     p_web.add_argument("--image-gen-checkpoint", default=None)
-    p_web.add_argument("--vision-config", default=None)
+    p_web.add_argument("--vision-config", default=None, help="deprecated; rejected (caption config is in --caption-dir)")
     p_web.add_argument("--vision-checkpoint", default=None)
+    p_web.add_argument("--caption-dir", default=None)
+    p_web.add_argument("--external-origin", default=None, help="exact browser origin behind a TLS-terminating proxy")
     p_web.add_argument("--host", default="127.0.0.1")
     p_web.add_argument("--port", type=int, default=8766)
     p_web.set_defaults(func=cmd_web)
+
+    p_doctor = sub.add_parser("doctor", help="check hardware, dependencies and execution isolation")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    p_scan = sub.add_parser("corpus-scan", help="review and scan a local source directory")
+    p_scan.add_argument("--directory", required=True)
+    p_scan.add_argument("--manifest", required=True)
+    p_scan.add_argument("--license", default="unknown")
+    p_scan.add_argument("--evidence", default=None)
+    p_scan.add_argument("--version", default=None)
+    p_scan.add_argument("--attribution", default=None)
+    p_scan.add_argument("--heldout", default=None)
+    p_scan.add_argument("--allow-training", action="store_true")
+    p_scan.add_argument("--allow-redistribution", action="store_true")
+    p_scan.set_defaults(func=cmd_corpus_scan)
+
+    p_build = sub.add_parser("corpus-build", help="materialize reviewed sources for training")
+    p_build.add_argument("--manifest", required=True)
+    p_build.add_argument("--output", required=True)
+    p_build.set_defaults(func=cmd_corpus_build)
+
+    p_search = sub.add_parser("corpus-search", help="discover quarantined GitHub repository candidates")
+    p_search.add_argument("--query", required=True)
+    p_search.add_argument("--limit", type=int, default=10)
+    p_search.add_argument("--manifest", required=True)
+    p_search.set_defaults(func=cmd_corpus_search)
+
+    p_imgtrain = sub.add_parser("image-train", help="train the image model from random initialization")
+    source = p_imgtrain.add_mutually_exclusive_group(required=True)
+    source.add_argument("--synthetic", action="store_true")
+    source.add_argument("--manifest", default=None)
+    p_imgtrain.add_argument("--config", default="configs/image-gen-small.json")
+    p_imgtrain.add_argument("--out-dir", default="out/image-gen")
+    p_imgtrain.add_argument("--count", type=int, default=240)
+    p_imgtrain.add_argument("--val-count", type=int, default=60)
+    p_imgtrain.set_defaults(func=cmd_image_train)
+
+    p_img = sub.add_parser("image-generate", help="generate or image-to-image edit using HELIX diffusion")
+    p_img.add_argument("--config", default="artifacts/image-gen/config.json")
+    p_img.add_argument("--checkpoint", default="artifacts/image-gen/ckpt-final.pt")
+    p_img.add_argument("--prompt", required=True)
+    p_img.add_argument("--output", required=True)
+    p_img.add_argument("--seed", type=int, default=1337)
+    p_img.add_argument("--init-image", default=None)
+    p_img.add_argument("--strength", type=float, default=.6)
+    p_img.set_defaults(func=cmd_image_generate)
+
+    p_scene = sub.add_parser("scene-render", help="render a controlled physics-informed scene")
+    p_scene.add_argument("--prompt", required=True)
+    p_scene.add_argument("--output", required=True)
+    p_scene.add_argument("--size", type=int, default=128)
+    p_scene.set_defaults(func=cmd_scene)
+
+    p_vision = sub.add_parser("vision-train", help="train synthetic visual attribute encoder")
+    p_vision.add_argument("--out-dir", default="out/vision")
+    p_vision.add_argument("--count", type=int, default=240)
+    p_vision.add_argument("--val-count", type=int, default=90)
+    p_vision.add_argument("--steps", type=int, default=300)
+    p_vision.add_argument("--batch-size", type=int, default=24)
+    p_vision.add_argument("--seed", type=int, default=1337)
+    p_vision.set_defaults(func=cmd_vision_train)
+
+    p_analyze = sub.add_parser("image-analyze", help="inspect pixels and optional synthetic-domain predictions")
+    p_analyze.add_argument("--image", required=True)
+    p_analyze.add_argument("--checkpoint", default="artifacts/vision/ckpt-final.pt")
+    p_analyze.add_argument("--caption", action="store_true")
+    p_analyze.add_argument("--caption-dir", default="artifacts/caption")
+    p_analyze.set_defaults(func=cmd_image_analyze)
+
+    p_caption = sub.add_parser("caption-train", help="train the synthetic-domain ViT-to-HELIX captioner")
+    p_caption.add_argument("--steps", type=int, default=800)
+    p_caption.add_argument("--batch-size", type=int, default=16)
+    p_caption.add_argument("--out-dir", default="out/caption")
+    p_caption.add_argument("--base-checkpoint", default="artifacts/llm/ckpt-best.pt")
+    p_caption.set_defaults(func=cmd_caption_train)
+
+    p_visual_eval = sub.add_parser("visual-eval", help="compare learned-only and physics-guided synthesis")
+    p_visual_eval.add_argument("--config", default="artifacts/image-gen/config.json")
+    p_visual_eval.add_argument("--image-checkpoint", default="artifacts/image-gen/ckpt-final.pt")
+    p_visual_eval.add_argument("--vision-checkpoint", default="artifacts/vision/ckpt-final.pt")
+    p_visual_eval.add_argument("--out-path", default="out/physics-comparison.json")
+    p_visual_eval.add_argument("--seed", type=int, default=2026)
+    p_visual_eval.set_defaults(func=cmd_visual_eval)
+
+    p_math = sub.add_parser("research", help="bounded SymPy verification")
+    p_math.add_argument("--operation", choices=["differentiate", "integrate", "simplify", "solve", "limit"], required=True)
+    p_math.add_argument("--expression", required=True)
+    p_math.add_argument("--variable", default="x")
+    p_math.add_argument("--point", default="0")
+    p_math.set_defaults(func=cmd_research)
+
+    p_code = sub.add_parser("code-run", help="execute an approved file in the Linux isolation sandbox")
+    p_code.add_argument("--file", required=True)
+    p_code.add_argument("--approve", action="store_true")
+    p_code.add_argument("--timeout", type=float, default=15)
+    p_code.set_defaults(func=cmd_code_run)
 
     return parser
 

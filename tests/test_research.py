@@ -116,3 +116,19 @@ def test_plots(tmp_path):
     p2 = str(tmp_path / "hist.png")
     r = plot_histogram([1, 1, 2, 3, 5], "hist", p2)
     assert r["points"] == 5 and os.path.isfile(p2)
+
+
+def test_plot_preserves_row_pairing_and_csv_is_bounded(tmp_path, monkeypatch):
+    import pytest
+    import helix.research as research
+    if not research.HAS_MPL: pytest.skip('matplotlib unavailable')
+    observed = []
+    original = research.plt.plot
+    def capture(x, y, *args, **kwargs):
+        observed.append((list(x), list(y)))
+        return original(x, y, *args, **kwargs)
+    monkeypatch.setattr(research.plt, 'plot', capture)
+    result = research.plot_line(['1', 'bad', '3'], ['10', '20', '30'], 'pairs', str(tmp_path/'pair.png'))
+    assert result['points'] == 2 and observed == [([1.0, 3.0], [10.0, 30.0])]
+    with pytest.raises(ValueError): research.load_csv('a,a\n1,2')
+    with pytest.raises(ValueError): research.load_csv(','.join(['x'] * 129))

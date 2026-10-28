@@ -1,0 +1,62 @@
+{
+  "hardware_device": "cpu",
+  "variants": [
+    {
+      "block_type": "transformer",
+      "n_params": 155968,
+      "max_iters": 120,
+      "train_tokens": 30720,
+      "elapsed_s": 1.022,
+      "tokens_per_sec": 30048.79,
+      "final_train_loss": 5.418999,
+      "final_val_loss": 5.429923,
+      "val_loss_curve": [
+        6.230092,
+        5.578087,
+        5.429923
+      ],
+      "checkpoint": "artifacts/ablation/ablate-transformer/ckpt-transformer.pt",
+      "initial_val_loss": 6.230092,
+      "heldout_loss_reduction_per_second": 0.78268576
+    },
+    {
+      "block_type": "linear_attn",
+      "n_params": 155968,
+      "max_iters": 120,
+      "train_tokens": 30720,
+      "elapsed_s": 1.741,
+      "tokens_per_sec": 17642.06,
+      "final_train_loss": 5.424257,
+      "final_val_loss": 5.441763,
+      "val_loss_curve": [
+        6.229879,
+        5.578719,
+        5.441763
+      ],
+      "checkpoint": "artifacts/ablation/ablate-linear_attn/ckpt-linear_attn.pt",
+      "initial_val_loss": 6.229879,
+      "heldout_loss_reduction_per_second": 0.45260377
+    },
+    {
+      "block_type": "recurrent",
+      "n_params": 180416,
+      "max_iters": 120,
+      "train_tokens": 30720,
+      "elapsed_s": 4.59,
+      "tokens_per_sec": 6692.99,
+      "final_train_loss": 5.385954,
+      "final_val_loss": 5.460378,
+      "val_loss_curve": [
+        6.246253,
+        5.585712,
+        5.460378
+      ],
+      "checkpoint": "artifacts/ablation/ablate-recurrent/ckpt-recurrent.pt",
+      "initial_val_loss": 6.246253,
+      "heldout_loss_reduction_per_second": 0.17121913
+    }
+  ],
+  "best_by_val_loss": "transformer",
+  "best_val_loss": 5.429923,
+  "note": "Lower val loss = better. All variants trained from random init on identical batches with the same token budget; parameter count and wall compute differ."
+}

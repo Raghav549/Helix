@@ -13,6 +13,7 @@ pretrained weights are involved.
 
 from __future__ import annotations
 
+import codecs
 import torch
 import torch.nn.functional as F
 
@@ -27,14 +28,17 @@ def load_model_and_tokenizer(
     config_path: str,
     checkpoint_path: str,
 ):
+    from helix.runtime import configure_threads
+    configure_threads()
     cfg = load_config(config_path)
     tok = ByteLevelBPETokenizer.load(cfg.data.vocab_file, cfg.data.merges_file)
     if len(tok) != cfg.model.vocab_size:
         cfg.model.vocab_size = len(tok)
     model = HelixTransformer(cfg.model)
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
     model.load_state_dict(state)
+    model.to(cfg.train.device)
     model.eval()
     return model, tok, cfg
 
@@ -55,7 +59,10 @@ def _sample_next(
     top_p: float | None = None,
 ) -> torch.Tensor:
     """Sample the next token id from logits (B, vocab). Returns (B, 1)."""
-    logits = logits[:, -1, :] / max(temperature, 1e-6)
+    logits = logits[:, -1, :]
+    if temperature <= 0:
+        return logits.argmax(dim=-1, keepdim=True)
+    logits = logits / temperature
     vocab = logits.size(-1)
 
     if top_k is not None and top_k > 0:
@@ -92,7 +99,7 @@ def generate(
     """Full-context-recompute generation (baseline, correct on all hardware)."""
     ids = tok.encode(text)
     if not ids:
-        ids = [tok.vocab.get(0, 0)]
+        ids = [tok._id_for_bytes(b"<|endoftext|>")]
     idx = torch.tensor([ids], dtype=torch.long, device=device)
     out = model.generate(
         idx,
@@ -101,7 +108,10 @@ def generate(
         top_k=top_k,
         top_p=top_p,
     )
-    return tok.decode(out[0].tolist())
+    decoded = tok.decode(out[0].tolist())
+    if not text and decoded.startswith("<|endoftext|>"):
+        decoded = decoded[len("<|endoftext|>"):]
+    return decoded
 
 
 @torch.no_grad()
@@ -124,36 +134,91 @@ def generate_with_cache(
     model.eval()
     ids = tok.encode(text)
     if not ids:
-        ids = [tok.vocab.get(0, 0)]
-    # Truncate prompt to fit the cache / context window.
-    if len(ids) > model.config.block_size:
-        ids = ids[-model.config.block_size :]
-
-    idx = torch.tensor([ids], dtype=torch.long, device=device)
+        ids = [tok._id_for_bytes(b"<|endoftext|>")]
+    if max_new_tokens <= 0:
+        return text
+    # Other experimental block types do not have a mathematically equivalent
+    # transformer KV-cache. Fall back to correct full recomputation.
+    if model.config.block_type != "transformer":
+        return generate(model, tok, text, max_new_tokens, temperature, top_k, top_p, device)
+    all_ids = list(ids)
     head_dim = model.config.n_embd // model.config.n_head
-    cache = KVCache(
-        n_layers=model.config.n_layer,
-        batch_size=1,
-        max_seq=model.config.block_size,
-        n_kv_head=model.config.n_kv_head,
-        head_dim=head_dim,
-        device=device,
-    )
-
-    # Prime: process the whole prompt to fill the cache.
+    cache = KVCache(n_layers=model.config.n_layer, batch_size=1,
+                    max_seq=model.config.block_size, n_kv_head=model.config.n_kv_head,
+                    head_dim=head_dim, device=device, dtype=model.tok_emb.weight.dtype)
+    context = all_ids[-model.config.block_size:]
+    idx = torch.tensor([context], dtype=torch.long, device=device)
     logits, cache = model.incremental_forward(idx, cache, 0)
-    next_id = _sample_next(logits, temperature, top_k, top_p)
-    generated = [next_id.item()]
-
-    pos = len(ids)
-    for _ in range(max_new_tokens - 1):
-        logits, cache = model.incremental_forward(next_id, cache, pos)
+    for step in range(max_new_tokens):
         next_id = _sample_next(logits, temperature, top_k, top_p)
-        generated.append(next_id.item())
-        pos += 1
+        all_ids.append(next_id.item())
+        if step == max_new_tokens - 1:
+            break
+        if cache.seq_len(0) >= model.config.block_size:
+            # Recompute a sliding window, matching full-context generation. A
+            # simple eviction would leave stale attention-dependent KV values.
+            cache.reset()
+            idx = torch.tensor([all_ids[-model.config.block_size:]], dtype=torch.long, device=device)
+            logits, cache = model.incremental_forward(idx, cache, 0)
+        else:
+            logits, cache = model.incremental_forward(next_id, cache, cache.seq_len(0))
+    decoded = tok.decode(all_ids)
+    if not text and decoded.startswith("<|endoftext|>"):
+        decoded = decoded[len("<|endoftext|>"):]
+    return decoded
 
-    all_ids = ids + generated
-    return tok.decode(all_ids)
+
+def stream_generate(model: HelixTransformer, tok: ByteLevelBPETokenizer, text: str,
+                    max_new_tokens: int = 80, temperature: float = .8,
+                    top_k: int | None = 40, top_p: float | None = None,
+                    device: str = "cpu"):
+    """Yield actual decoded text as tokens are sampled; stop on reserved EOS.
+
+    Uses incremental KV cache for transformer blocks and an exact sliding
+    window re-prime when full. A byte incremental decoder preserves UTF-8 across
+    token boundaries. Experimental non-transformer blocks use recomputation.
+    """
+    if max_new_tokens < 0 or max_new_tokens > 2048:
+        raise ValueError("max_new_tokens must be between 0 and 2048")
+    eos = tok._id_for_bytes(b"<|endoftext|>")
+    reserved = {tok._id_for_bytes(t.encode()) for t in tok.special_tokens}
+    ids = tok.encode(text) or [eos]
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    model.eval()
+    use_cache = model.config.block_type == "transformer"
+    with torch.no_grad():
+        cache = None
+        if use_cache:
+            cache = KVCache(model.config.n_layer, 1, model.config.block_size,
+                            model.config.n_kv_head, model.config.n_embd // model.config.n_head,
+                            device, dtype=model.tok_emb.weight.dtype)
+            idx = torch.tensor([ids[-model.config.block_size:]], dtype=torch.long, device=device)
+            logits, _ = model.incremental_forward(idx, cache, 0)
+        for step in range(max_new_tokens):
+            if not use_cache:
+                idx = torch.tensor([ids[-model.config.block_size:]], dtype=torch.long, device=device)
+                logits, _ = model(idx)
+            next_id = _sample_next(logits, temperature, top_k, top_p)
+            token = int(next_id.item())
+            if token == eos:
+                break
+            ids.append(token)
+            if token not in reserved:
+                chunk = decoder.decode(tok.vocab[token], final=False)
+                if chunk:
+                    yield chunk
+            if step == max_new_tokens - 1:
+                break
+            if use_cache:
+                if cache.seq_len(0) >= model.config.block_size:
+                    cache.reset()
+                    idx = torch.tensor([ids[-model.config.block_size:]], dtype=torch.long, device=device)
+                    logits, _ = model.incremental_forward(idx, cache, 0)
+                else:
+                    logits, _ = model.incremental_forward(next_id, cache, cache.seq_len(0))
+        tail = decoder.decode(b"", final=True)
+        if tail:
+            yield tail
 
 
 @torch.no_grad()
@@ -190,16 +255,12 @@ def chat(config_path: str, checkpoint_path: str) -> None:
                 continue
             if user.lower() in ("exit", "quit"):
                 break
-            reply = generate(
-                model,
-                tok,
-                user,
-                max_new_tokens=60,
-                temperature=0.8,
-                top_k=50,
-                device=device,
-            )
-            print(f"helix> {reply}\n")
+            prompt = f"INSTRUCTION: {user}\nRESPONSE: "
+            print("helix> ", end="", flush=True)
+            for chunk in stream_generate(model, tok, prompt, max_new_tokens=80,
+                                         temperature=0.7, top_k=40, device=device):
+                print(chunk, end="", flush=True)
+            print("\n")
     except KeyboardInterrupt:
         pass
     print("Goodbye.")
