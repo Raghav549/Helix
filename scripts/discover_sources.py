@@ -86,7 +86,7 @@ def parse_open_library(payload: dict[str, Any], query: str) -> list[SourceRecord
         url = "https://openlibrary.org" + str(key)
         records.append(_record(
             f"open-library:{key}", "book/metadata", url, "catalog-specific/unknown",
-            "Open Library Search API", language=",".join(item.get("language", [])),
+            "Open Library Search API", language=",".join(item.get("language") or []),
             notes=f"Catalog metadata for query {query!r}; Open Library metadata is not full text and does not itself grant book training rights.",
         ))
     return records
