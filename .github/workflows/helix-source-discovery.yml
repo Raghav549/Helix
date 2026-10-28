@@ -3,6 +3,7 @@ name: HELIX metadata-only source discovery
 on:
   push:
     branches:
+      - main
       - codex/helix-source-discovery
     paths:
       - 'scripts/discover_sources.py'
