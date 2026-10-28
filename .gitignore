@@ -25,6 +25,7 @@ data/merges.json
 checkpoints/
 *.log
 
+artifacts/
 # OS
 .DS_Store
 Thumbs.db

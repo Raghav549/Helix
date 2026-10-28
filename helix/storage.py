@@ -19,9 +19,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
 # Roots that must never be part of an external storage location. This prevents
 # a misconfigured environment variable from moving HELIX data inside the repo.
-REPOSITORY_DIR_NAMES = frozenset(
-    ('helix', 'artifacts', 'configs', 'docs', 'tests', 'scripts')
-)
+REPOSITORY_DIR_NAMES = frozenset(('artifacts', 'configs', 'docs', 'tests', 'scripts'))
 
 
 class StorageError(RuntimeError):

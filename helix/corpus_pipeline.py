@@ -37,7 +37,7 @@ class CorpusStats:
 
 
 BENCHMARK_PATTERNS = [
-    re.compile(r'\b(?:brownie|donut|arc|truthfulqa|gsm8k|mmlu|ceval|hellaswag)\b', re.I),
+    re.compile(r'(?<![\w])(?:brownie|donut|arc|truthfulqa|gsm[\s_-]*8k|mmlu|ceval|hellaswag)(?![\w])', re.I),
 ]
 
 
@@ -77,11 +77,13 @@ def build_corpus(documents: list[tuple[str, str]],
     benchmark_filtered = 0
     for doc_id, text in documents:
         normalized = normalize_text(text)
-        metrics = quality_score(normalized)
-        if not passes_quality(metrics):
-            continue
+        # Leakage is checked before the quality gate so rejected evidence is
+        # counted accurately rather than silently grouped as low-quality data.
         if benchmark_leakage(normalized):
             benchmark_filtered += 1
+            continue
+        metrics = quality_score(normalized)
+        if not passes_quality(metrics):
             continue
         quality_passed += 1
         raw.append({'id': doc_id, 'text': normalized, 'metadata': {'language': language_hint(normalized)},

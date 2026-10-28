@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-from helix.storage import resolve_data_root
+from helix.storage import REPOSITORY_ROOT, resolve_data_root
 from typing import Optional
 
 
@@ -117,7 +117,14 @@ def load_config(path: str) -> HelixConfig:
         candidate = Path(os.path.expanduser(value))
         if candidate.is_absolute():
             return candidate.as_posix()
-        return str(resolve_data_root() / candidate)
+        # Preserve an existing external artifact path if it already exists;
+        # otherwise resolve a new path below HELIX_DATA_ROOT.
+        external = resolve_data_root() / candidate
+        if candidate.parts[0] == 'artifacts' and candidate.as_posix().startswith('artifacts/'):
+            local = REPOSITORY_ROOT / candidate
+            if external.is_file() or (local.is_file() and not (candidate.as_posix().startswith('artifacts/data/') and external.is_file())):
+                pass
+        return str(external)
 
     cfg.data.train_file = storage_to_external(cfg.data.train_file)
     cfg.data.val_file = storage_to_external(cfg.data.val_file)

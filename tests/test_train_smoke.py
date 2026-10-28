@@ -1,5 +1,9 @@
 """Smoke test: real end-to-end training from random initialization (tiny)."""
 
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+
 import json
 import os
 import tempfile
@@ -25,7 +29,7 @@ def _write_cfg(tmp):
             val_file=os.path.join(tmp, "val.npy"),
             vocab_file=os.path.join(tmp, "vocab.json"),
             merges_file=os.path.join(tmp, "merges.json"),
-            corpus_file="data/seed_corpus.txt", train_frac=0.9,
+            corpus_file=str(REPO / "data/seed_corpus.txt"), train_frac=0.9,
         ),
     )
     path = os.path.join(tmp, "config.json")
@@ -56,7 +60,7 @@ def test_train_from_random_init_and_resume(tmp_path):
             val_file=os.path.join(tmp_path, "val.npy"),
             vocab_file=os.path.join(tmp_path, "vocab.json"),
             merges_file=os.path.join(tmp_path, "merges.json"),
-            corpus_file="data/seed_corpus.txt", train_frac=0.9,
+            corpus_file=str(REPO / "data/seed_corpus.txt"), train_frac=0.9,
         ),
     )
     cfg_path2 = os.path.join(tmp_path, "config2.json")

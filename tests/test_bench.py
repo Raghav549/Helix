@@ -1,5 +1,9 @@
 """Tests for the HELIX benchmark harness."""
 
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+
 import os
 import tempfile
 
@@ -45,7 +49,7 @@ def test_bench_runs_end_to_end(tmp_path):
                         val_file=str(tmp_path / "val.npy"),
                         vocab_file=str(tmp_path / "vocab.json"),
                         merges_file=str(tmp_path / "merges.json"),
-                        corpus_file="data/seed_corpus.txt", train_frac=0.9),
+                        corpus_file=str(REPO / "data/seed_corpus.txt"), train_frac=0.9),
     )
     cfg_path = tmp_path / "config.json"
     save_config(cfg, str(cfg_path))

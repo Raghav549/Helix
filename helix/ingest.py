@@ -8,7 +8,9 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from http.client import HTTPConnection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,7 +30,7 @@ class TimeoutHandler(urllib.request.HTTPHandler):
         self.timeout = timeout
 
     def http_open(self, request):
-        return self.do_open(urllib.request.HTTPConnection, request, timeout=self.timeout)
+        return self.do_open(HTTPConnection, request)
 
     https_open = http_open
 

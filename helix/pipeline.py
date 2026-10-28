@@ -9,7 +9,8 @@ from pathlib import Path
 
 from helix.corpus_pipeline import build_corpus, read_documents
 from helix.extract import extract_source
-from helix.ingest import ingest_catalog
+from helix.ingest import ingest_source
+from helix.sources import Catalog
 from helix.storage import StorageError, resolve, resolve_data_root, sha256_file
 from helix.tokenizer import ByteLevelBPETokenizer
 from helix.data import build_from_corpus
@@ -29,13 +30,24 @@ def run(root: os.PathLike[str] | str | None = None,
     if not catalog_path.is_file():
         raise StorageError(f'source catalog not found: {catalog_path}')
 
-    ingest = ingest_catalog(catalog_path, storage_root)
+    catalog = Catalog.load(catalog_path, storage_root)
+    catalog.validate()
     documents = []
-    for item in ingest:
-        source_path = storage_root / item.path
-        extracted = extract_source(source_path, item.source,
-                                   {'ingest_sha256': item.sha256,
-                                    'content_type': item.content_type})
+    for record in catalog.eligible():
+        # HELIX-authored source records may point to local content; HTTP
+        # records use the bounded downloader and hash the staged file.
+        if record.name == 'helix-seed-corpus':
+            source_path = resolve('seed_corpus.txt', storage_root)
+            if not source_path.is_file():
+                raise StorageError(f'HELIX seed corpus is missing from {source_path}')
+            text = source_path.read_text(encoding='utf-8')
+            documents.append((record.name, text))
+            continue
+        ingest = ingest_source(record, storage_root)
+        source_path = storage_root / ingest.path
+        extracted = extract_source(source_path, ingest.source,
+                                   {'ingest_sha256': ingest.sha256,
+                                    'content_type': ingest.content_type})
         documents.append((extracted.doc_id, extracted.text))
     manifest, stats = build_corpus(documents, storage_root)
 

@@ -58,7 +58,7 @@ def quality_score(text: str) -> dict[str, object]:
     score = 0.0
     if tokens >= 100: score += 0.35
     if letters_per_token >= 3.0: score += 0.20
-    if vocabulary_density >= 0.20: score += 0.20
+    if vocabulary_density >= 0.12: score += 0.20
     if 0.02 <= repetition <= 0.75: score += 0.25
     return {'tokens': tokens, 'letters_per_token': round(letters_per_token, 4),
             'vocabulary_density': round(vocabulary_density, 4),

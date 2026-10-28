@@ -49,9 +49,10 @@ class Manifest:
         payload = asdict(self)
         return payload
 
-    def save(self, path: os.PathLike[str] | str) -> Path:
+    def save(self, path: os.PathLike[str] | str,
+             root: os.PathLike[str] | str | None = None) -> Path:
         from helix.storage import resolve
-        target = resolve(path)
+        target = resolve(path, root)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(self.to_json(), indent=2, sort_keys=True) + '\n',
                           encoding='utf-8')

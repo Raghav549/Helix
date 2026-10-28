@@ -108,7 +108,10 @@ def load_sources(path: os.PathLike[str] | str | None = None,
 def add_sources(records: Iterable[SourceRecord],
                 path: os.PathLike[str] | str | None = None,
                 root: os.PathLike[str] | str | None = None) -> Catalog:
-    existing = Catalog.load(path, root)
+    target = resolve(path or 'manifests/sources.json', root)
+    existing = Catalog(version=1, generated_by='helix')
+    if target.is_file():
+        existing = Catalog.load(target, root)
     names = {record.name for record in existing.sources}
     for record in records:
         if record.name in names:
@@ -116,7 +119,7 @@ def add_sources(records: Iterable[SourceRecord],
         existing.sources.append(record)
         names.add(record.name)
     existing.validate()
-    target = existing.save(path, root)
+    existing.save(target, root)
     return Catalog.load(target, root)
 
 

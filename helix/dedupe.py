@@ -25,7 +25,7 @@ def document_hash(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def shingle_hashes(text: str, size: int = 5, count: int = 300) -> set[str]:
+def shingle_hashes(text: str, size: int = 10, count: int = 4000) -> set[str]:
     words = [word.lower() for word in TOKEN_RE.findall(text)][:count]
     if len(words) < size:
         return {hashlib.blake2b(text.encode('utf-8'), digest_size=8).hexdigest()}
