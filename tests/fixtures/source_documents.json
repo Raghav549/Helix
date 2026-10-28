@@ -1,0 +1,7 @@
+{
+  "documents": [
+    {"id": "python-functions", "text": "Python functions return values. Defining a function creates a reusable operation. Tests verify behavior."},
+    {"id": "mathematics-evidence", "text": "Mathematics uses definitions, proofs and calculations. A conclusion should follow evidence rather than assumption."},
+    {"id": "history-context", "text": "Historical study examines sources, dates and consequences. Context changes how an event is understood."}
+  ]
+}

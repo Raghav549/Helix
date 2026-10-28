@@ -245,6 +245,17 @@ def cmd_agent(args: argparse.Namespace) -> int:
 
 
 
+def cmd_sources(args: argparse.Namespace) -> int:
+    from helix.pipeline import run
+    try:
+        result = run(root=args.data_root)
+    except Exception as exc:
+        print(f'HELIX source pipeline failed: {exc}', file=sys.stderr)
+        return 2
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_web(args: argparse.Namespace) -> int:
     from helix.web import main as web_main
     # web_main parses its own args; rebuild argv for it.
@@ -513,6 +524,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent.add_argument("--audit-log", default="out/agent-audit.json",
                          help="path to write the audit log")
     p_agent.set_defaults(func=cmd_agent)
+
+    p_sources = sub.add_parser("sources", help="run the external rights-aware corpus pipeline")
+    p_sources.add_argument("--data-root", default=None)
+    p_sources.set_defaults(func=cmd_sources)
 
     p_web = sub.add_parser("web", help="local integrated web UI (chat, images, code, research)")
     p_web.add_argument("--config", default="configs/helix-research.json")
