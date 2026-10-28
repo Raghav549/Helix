@@ -233,6 +233,23 @@ def cmd_agent(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def cmd_web(args: argparse.Namespace) -> int:
+    from helix.web import main as web_main
+    # web_main parses its own args; rebuild argv for it.
+    import sys as _sys
+    argv = []
+    if args.config: argv += ["--config", args.config]
+    if args.checkpoint: argv += ["--checkpoint", args.checkpoint]
+    if args.image_gen_config: argv += ["--image-gen-config", args.image_gen_config]
+    if args.image_gen_checkpoint: argv += ["--image-gen-checkpoint", args.image_gen_checkpoint]
+    if args.vision_config: argv += ["--vision-config", args.vision_config]
+    if args.vision_checkpoint: argv += ["--vision-checkpoint", args.vision_checkpoint]
+    argv += ["--host", args.host, "--port", str(args.port)]
+    _sys.argv = ["helix", "web"] + argv
+    return web_main()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="helix", description="HELIX CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -318,6 +335,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent.add_argument("--audit-log", default="out/agent-audit.json",
                          help="path to write the audit log")
     p_agent.set_defaults(func=cmd_agent)
+
+    p_web = sub.add_parser("web", help="local integrated web UI (chat, images, code, research)")
+    p_web.add_argument("--config", default="configs/helix-tiny.json")
+    p_web.add_argument("--checkpoint", default="out/tiny-run/ckpt-best.pt")
+    p_web.add_argument("--image-gen-config", default=None)
+    p_web.add_argument("--image-gen-checkpoint", default=None)
+    p_web.add_argument("--vision-config", default=None)
+    p_web.add_argument("--vision-checkpoint", default=None)
+    p_web.add_argument("--host", default="127.0.0.1")
+    p_web.add_argument("--port", type=int, default=8766)
+    p_web.set_defaults(func=cmd_web)
 
     return parser
 

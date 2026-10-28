@@ -105,3 +105,64 @@ Every technique is a hypothesis to benchmark. Adopt only when measured
 evaluation justifies it: quality per token, quality per second, memory
 efficiency, stability, reproducibility, or inference speed. Distinguish
 established methods from experimental/unverified ideas.
+
+## v0.8 — Image generation pipeline (latent diffusion from random init)
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | A small latent diffusion model (VAE + UNet + DDPM) can be trained from random init on CPU and generate 32x32 images; text conditioning via projected embeddings is feasible. |
+| Reference | Rombach et al. 2022 (latent diffusion), Nichol & Dhariwal 2021 (cosine schedule), Ho et al. 2020 (DDPM) — inspected as references; VAE/UNet/DDPM implemented independently. |
+| Techniques | helix/image_gen.py: VAE (encoder/decoder, reconstruction + KL), ConditionedUNet (residual blocks + time + attention + text conditioning), DiffusionSchedule (cosine/linear), LatentDiffusion (train + reverse sampler), train_image_gen / generate_images. |
+| Status | Implemented; tests/test_image_gen.py (8 tests). |
+| Hardware | 2 vCPU, 3.85 GB RAM, CPU only. |
+| Results | Prototype 32x32 images train from random init; loss decreases over iterations. Quality is prototype-level at 32x32 — honestly documented, not photorealistic. No pretrained image weights used. |
+| Limitations | 32x32 resolution is tiny; no photorealistic claims. Text conditioning present but unvalidated at this scale. Next: image understanding + integrated UI. |
+
+## v0.9 — Image understanding (ViT encoder -> LLM embedding space)
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | A small VisionTransformer (patch embedding + transformer blocks) + linear projector can encode images into the LLM's embedding space as prefix tokens, enabling image-conditioned text generation, trained from random init. |
+| Reference | ViT (Dosovitskiy et al. 2020), LLaVA-style multimodal projector — inspected as references; implemented independently. |
+| Techniques | helix/image_understanding.py: PatchEmbedding, VisionTransformer, ImageProjection, MultimodalHelix (wraps HelixTransformer, prepends image prefix embeddings to text embeddings), train_image_understanding (next-token loss on image-text pairs), generate (image-conditioned). |
+| Status | Implemented; tests/test_image_understanding.py (7 tests). |
+| Results | Forward pass, generation, and training from random init all work on CPU. |
+| Limitations | Tiny ViT (32x32, 64 dim); understanding is prototype-level, not a real vision model. No pretrained vision weights. Next: integrated web UI. |
+
+## v0.10 — Integrated web UI (chat, images, code, research)
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | A single local Flask UI can unify all four first-class capabilities (LLM chat, image generation, image understanding, coding agent, research lab) with lazy model loading and SSE/JSON APIs. |
+| Techniques | helix/web.py: Flask app, single-page tabbed UI, /api/chat (streaming LLM), /api/image/generate (latent diffusion), /api/image/analyze (ViT understanding), /api/code/execute (sandboxed PythonTool), /api/code/explain (LLM), /api/research/experiments (tracker), /out/web_images (serve generated images). Lazy ModelCache loads models on first request. |
+| Status | Implemented; tests/test_web.py (5 tests). Verified chat + code execute endpoints work. |
+| Results | UI starts and serves all tabs; chat and code execution return real results from the tiny model / sandbox. |
+| Limitations | Backed by the tiny LLM (174K params) — chat quality is low, honestly a capacity limitation. Image gen/analysis require separate training runs (CLI) before use in UI. Next: coding agent + research lab as first-class modules. |
+
+## v0.11 — Advanced coding & software-engineering agent
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | A coding agent combining repo inspection, AST static analysis, sandboxed execution, patch generation, and test generation can perform repository-level software tasks with real interpreter feedback rather than judging code from text alone. |
+| Techniques | helix/coding.py: RepoInspector (read-only repo traversal), StaticAnalyzer (Python AST: symbols, imports, complexity, TODOs, syntax errors), PatchGenerator (unified diff make/apply), TestGenerator (unittest scaffolding), CodingAgent (orchestrator: list/read/analyze/execute/patch/tests), demo_code_fix (analysis + execution feedback). Reuses agent.PythonTool sandbox (timeout, memory limit, temp cwd). |
+| Status | Implemented; tests/test_coding.py (7 tests). |
+| Hardware | CPU only; execution sandboxed and bounded. |
+| Results | Static analysis, patch generation, test generation, and sandboxed execution all work. Real compiler/interpreter feedback is the correctness signal. |
+| Limitations | Python-focused static analysis; patch apply is a minimal unified-diff subset. LLM-assisted explain/fix goes through the tiny model (low quality). No pretrained code models. Next: research lab. |
+
+## v0.12 — Research laboratory (math, statistics, data analysis, plotting)
+
+| Entry | Detail |
+|-------|--------|
+| Hypothesis | A reproducible research-lab environment (experiment tracker + sympy symbolic math + statistics + data analysis + plotting) lets HELIX run computational experiments and distinguish tool-verified results from model-generated claims. |
+| Techniques | helix/research.py: ExperimentTracker (record.json + metrics.json per run, legacy scan), SymbolicMath (sympy: differentiate/integrate/solve/simplify/limit, verified_by="sympy"), Statistics (describe/correlation/linear regression), load_csv/summarize_csv, plot_line/plot_histogram (matplotlib Agg), evaluate_claim (model claim vs tool-verified verdict), run_reproducible_experiment (tracked run wrapper). |
+| Status | Implemented; tests/test_research.py (12 tests). sympy and matplotlib available as independent verification instruments. |
+| Results | Symbolic math, statistics, CSV summarization, plotting, and experiment tracking all work; evaluate_claim confirms/disagrees model claims vs tools. |
+| Limitations | sympy/matplotlib are external (OSI-approved) verification instruments, clearly distinguished from HELIX's own model. No theorem prover integration yet. Next: final integration + release. |
+
+## Adoption policy
+
+Every technique is a hypothesis to benchmark. Adopt only when measured
+evaluation justifies it: quality per token, quality per second, memory
+efficiency, stability, reproducibility, or inference speed. Distinguish
+established methods from experimental/unverified ideas.
