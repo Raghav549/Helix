@@ -1,4 +1,4 @@
-"""HELIX — an open-source, research-grade, CPU-first AI system.
+"""HELIX — an open-source, experimental CPU-first AI research system.
 
 Trained from random initialization. Core components implemented independently:
 tokenizer, model, data pipeline, training engine, evaluation, inference, and CLI.
@@ -16,7 +16,7 @@ Capability areas:
 
 from __future__ import annotations
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 from helix.config import HelixConfig, ModelConfig, TrainConfig, DataConfig, load_config, save_config
 

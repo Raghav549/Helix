@@ -94,6 +94,10 @@ class LinearAttention(nn.Module):
             q = _apply_rope(q, cos, sin)
             k = _apply_rope(k, cos, sin)
 
+        # Positive feature map from linear attention: signed q/k can make the
+        # normalizer near zero and cause catastrophic instability.
+        q = F.elu(q) + 1.0
+        k = F.elu(k) + 1.0
         k, v = self._expand_kv(k, v, B, T)  # (B,h,T,d)
 
         # Causal linear attention via cumulative sums: O(T) time/memory.

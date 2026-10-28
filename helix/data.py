@@ -1,87 +1,85 @@
-"""Data pipeline: tokenize a corpus, split train/val, and serve batches.
-
-The baseline uses a small seed corpus shipped in data/seed_corpus.txt. Later
-stages will plug in the extensible corpus-discovery/ingestion system described
-in docs/DATA_PIPELINE.md, with provenance tracking per document.
-"""
-
+"""Deterministic document-level split, train-only BPE and memory-mapped batches."""
 from __future__ import annotations
-
+import hashlib
+import json
 import os
 from typing import Tuple
-
 import numpy as np
 import torch
-
 from helix.tokenizer import ByteLevelBPETokenizer
 
 
-def build_from_corpus(
-    corpus_file: str,
-    vocab_file: str,
-    merges_file: str,
-    vocab_size: int,
-    train_frac: float,
-    train_out: str,
-    val_out: str,
-) -> Tuple[ByteLevelBPETokenizer, np.ndarray, np.ndarray]:
-    """Train the BPE tokenizer on the corpus and write train/val token arrays."""
-    with open(corpus_file, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    # Treat non-empty paragraph blocks as separate documents so the tokenizer
-    # sees document boundaries and end-of-text markers.
-    docs = [d.strip() for d in text.split("\n\n") if d.strip()]
-
+def build_from_corpus(corpus_file: str, vocab_file: str, merges_file: str,
+                      vocab_size: int, train_frac: float, train_out: str,
+                      val_out: str) -> Tuple[ByteLevelBPETokenizer, np.ndarray, np.ndarray]:
+    if not 0 < train_frac < 1:
+        raise ValueError('train_frac must be between 0 and 1')
+    with open(corpus_file, 'rb') as f:
+        raw = f.read()
+    text = raw.decode('utf-8').replace('\r\n', '\n').replace('\r', '\n')
+    docs = [d.strip() for d in text.split('\n\n') if d.strip()]
+    if not docs:
+        raise ValueError('corpus is empty')
+    # Hold out documents before training the tokenizer. For one document, split
+    # characters (rather than train BPE on the validation portion).
+    if len(docs) == 1:
+        cut = max(1, min(len(text) - 1, int(len(text) * train_frac)))
+        if len(text) < 2:
+            raise ValueError('corpus needs at least two characters')
+        train_docs, val_docs = [text[:cut]], [text[cut:]]
+    else:
+        ntrain = max(1, min(len(docs) - 1, int(len(docs) * train_frac)))
+        train_docs, val_docs = docs[:ntrain], docs[ntrain:]
     tok = ByteLevelBPETokenizer()
-    tok.train(docs, vocab_size)
+    tok.train(train_docs, vocab_size)
     tok.save(vocab_file, merges_file)
-
-    ids = tok.encode(text, add_eos=True)
-    arr = np.array(ids, dtype=np.int64)
-    n = len(arr)
-    n_train = max(1, int(n * train_frac))
-    train_ids = arr[:n_train]
-    val_ids = arr[n_train:] if n_train < n else arr[-1:]
-
-    os.makedirs(os.path.dirname(train_out) or ".", exist_ok=True)
-    os.makedirs(os.path.dirname(val_out) or ".", exist_ok=True)
-    np.save(train_out, train_ids)
-    np.save(val_out, val_ids)
+    def encode_docs(items):
+        return np.array([token for doc in items for token in tok.encode(doc, add_eos=True)], dtype=np.int64)
+    train_ids, val_ids = encode_docs(train_docs), encode_docs(val_docs)
+    for path, arr in ((train_out, train_ids), (val_out, val_ids)):
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'wb') as f:
+            np.save(f, arr)
+    def file_hash(path):
+        digest = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(65536), b''):
+                digest.update(chunk)
+        return digest.hexdigest()
+    metadata = {
+        'corpus_sha256': hashlib.sha256(raw).hexdigest(),
+        'train_documents': len(train_docs), 'val_documents': len(val_docs),
+        'train_tokens': int(len(train_ids)), 'val_tokens': int(len(val_ids)),
+        'tokenizer_trained_on': 'train only', 'vocab_size': len(tok),
+        'vocab_target': vocab_size, 'train_fraction': train_frac,
+        'file_sha256': {name: file_hash(path)
+                        for name, path in (('train', train_out), ('val', val_out),
+                                           ('vocab', vocab_file), ('merges', merges_file))},
+    }
+    with open(train_out + '.meta.json', 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2)
     return tok, train_ids, val_ids
 
 
 def load_ids(path: str) -> np.ndarray:
-    return np.load(path)
+    return np.load(path, mmap_mode='r', allow_pickle=False)
 
 
-def get_batch(
-    split: str,
-    train_ids: np.ndarray,
-    val_ids: np.ndarray,
-    batch_size: int,
-    block_size: int,
-    device: str,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    data = train_ids if split == "train" else val_ids
-    # Robust to tiny validation splits: use an effective block no larger than
-    # the data allows; tile cyclically if the data is shorter than one block.
+def get_batch(split: str, train_ids: np.ndarray, val_ids: np.ndarray,
+              batch_size: int, block_size: int, device: str, generator=None) -> Tuple[torch.Tensor, torch.Tensor]:
+    if split not in ('train', 'val'):
+        raise ValueError('split must be train or val')
+    data = train_ids if split == 'train' else val_ids
+    if len(data) == 0 or batch_size < 1 or block_size < 1:
+        raise ValueError('dataset, batch_size and block_size must be nonempty')
     if len(data) <= block_size:
-        reps = max(1, block_size // max(len(data), 1) + 2)
-        data = np.tile(data, reps)[: block_size + 1]
-    effective_block = min(block_size, len(data) - 1)
-    max_start = len(data) - effective_block
-    ix = torch.randint(max_start, (batch_size,))
-    x = torch.stack(
-        [torch.from_numpy(data[i : i + effective_block].astype(np.int64)) for i in ix]
-    )
-    y = torch.stack(
-        [torch.from_numpy(data[i + 1 : i + 1 + effective_block].astype(np.int64)) for i in ix]
-    )
-    if device == "cuda":
-        x = x.pin_memory().to(device, non_blocking=True)
-        y = y.pin_memory().to(device, non_blocking=True)
+        data = np.tile(data, block_size // len(data) + 2)[:block_size + 1]
+    max_start = len(data) - block_size
+    ix = torch.randint(max_start, (batch_size,), generator=generator).tolist()
+    x = torch.stack([torch.from_numpy(np.array(data[i:i + block_size], dtype=np.int64)) for i in ix])
+    y = torch.stack([torch.from_numpy(np.array(data[i + 1:i + 1 + block_size], dtype=np.int64)) for i in ix])
+    if str(device).startswith('cuda'):
+        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
     else:
-        x = x.to(device)
-        y = y.to(device)
+        x, y = x.to(device), y.to(device)
     return x, y

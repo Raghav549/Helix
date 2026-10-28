@@ -74,12 +74,12 @@ def test_repo_inspector(tmp_path):
 
 def test_coding_agent_execute():
     agent = CodingAgent(root=tempfile.gettempdir())
-    res = agent.execute_code("result = 21 * 2\n")
+    res = agent.execute_code("result = 21 * 2\n", approved=True)
     assert res.ok is True and "42" in res.output
 
 
 def test_demo_code_fix():
-    out = demo_code_fix("result = 10 / 2\n")
+    out = demo_code_fix("result = 10 / 2\n", approved=True)
     assert "analysis" in out and "execution" in out
     assert out["execution"]["ok"] is True
     assert "5.0" in out["execution"]["output"]

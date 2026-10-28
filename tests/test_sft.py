@@ -78,7 +78,8 @@ def test_sft_smoke_end_to_end(tmp_path):
                           eval_iters=1, learning_rate=1e-3, warmup_iters=1,
                           lr_decay_iters=1, log_interval=1, save_interval=1,
                           out_dir=str(tmp_path / "unused")),
-        data=DataConfig(train_file="data/train.npy", val_file="data/val.npy",
+        data=DataConfig(train_file=str(tmp_path / "train.npy"),
+                        val_file=str(tmp_path / "val.npy"),
                         vocab_file=str(vocab_f), merges_file=str(merges_f),
                         corpus_file="data/seed_corpus.txt", train_frac=0.9),
     )
@@ -114,3 +115,14 @@ def test_sft_smoke_end_to_end(tmp_path):
                                                os.path.join(out_dir, "sckpt-final.pt"))
     resp = generate_response(model2, tok2, "Say hello.", device="cpu", max_new_tokens=6)
     assert isinstance(resp, str) and len(resp) > 0
+
+
+def test_sft_mask_supervises_exactly_response_and_eos():
+    tok = ByteLevelBPETokenizer()
+    tok.train(['INSTRUCTION: example\nRESPONSE: answer and answer'], vocab_size=300)
+    ids, mask = tokenize_pairs([('example', 'answer')], tok, 64)[0]
+    targets = ids[1:]
+    supervised = targets[mask[:-1].astype(bool)].tolist()
+    assert supervised == tok.encode('answer', add_eos=True)
+    ids, mask = tokenize_pairs([('an instruction ' * 100, 'a response ' * 20)], tok, 16)[0]
+    assert len(ids) <= 17 and mask.sum() > 0

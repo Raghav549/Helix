@@ -113,13 +113,12 @@ class CausalSelfAttention(nn.Module):
                 B, self.n_head, T, self.head_dim
             )
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
-        mask = torch.tril(torch.ones(T, T, device=x.device)).view(1, 1, T, T)
-        att = att.masked_fill(mask == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
-
-        y = att @ v  # (B, nh, T, hs)
+        # PyTorch dispatches to supported optimized kernels (CPU math/oneDNN,
+        # CUDA flash/memory-efficient when available); no flash claim on CPU.
+        y = F.scaled_dot_product_attention(
+            q, k, v, is_causal=True,
+            dropout_p=self.dropout if self.training else 0.0,
+        )
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.resid_dropout(self.c_proj(y))
         return y
@@ -267,7 +266,8 @@ class HelixTransformer(nn.Module):
         """RoPE cos/sin for absolute positions [start, end)."""
         rope = RotaryEmbedding(self.head_dim, self.config.rope_base)
         rope.inv_freq = rope.inv_freq.to(device)
-        return rope(end - start, device)
+        cos, sin = rope(end, device)
+        return cos[:, :, start:end, :], sin[:, :, start:end, :]
 
     def incremental_forward(
         self,
@@ -282,11 +282,10 @@ class HelixTransformer(nn.Module):
         """
         device = idx.device
         B, T = idx.size()
-        if T > self.config.block_size:
-            idx = idx[:, -self.config.block_size:]
-            T = self.config.block_size
-            start_pos = max(0, start_pos - (idx.size(1) - T))
-
+        if T < 1 or start_pos < 0 or start_pos + T > self.config.block_size:
+            raise ValueError("incremental context exceeds the model window")
+        if any(cache.seq_len(i) != start_pos for i in range(self.config.n_layer)):
+            raise ValueError("start_pos must equal each layer's cache length")
         x = self.drop(self.tok_emb(idx))
         cos, sin = self._rope_positions(start_pos, start_pos + T, device)
 

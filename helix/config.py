@@ -32,8 +32,13 @@ class ModelConfig:
                                      # "transformer,linear_attn" for hybrid (cycled)
 
     def __post_init__(self) -> None:
+        if min(self.vocab_size, self.block_size, self.n_layer, self.n_head,
+               self.n_embd, self.n_kv_head) <= 0:
+            raise ValueError("model dimensions must be positive")
         if self.n_embd % self.n_head != 0:
             raise ValueError("n_embd must be divisible by n_head")
+        if (self.n_embd // self.n_head) % 2:
+            raise ValueError("RoPE requires an even head dimension")
         if self.n_head % self.n_kv_head != 0:
             raise ValueError("n_head must be divisible by n_kv_head")
         allowed = {"transformer", "linear_attn", "recurrent"}

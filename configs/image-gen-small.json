@@ -1,0 +1,23 @@
+{
+  "image_gen": {
+    "image_size": 32,
+    "latent_size": 8,
+    "latent_channels": 4,
+    "vae_channels": 8,
+    "unet_channels": 8,
+    "time_embed_dim": 32,
+    "unet_heads": 4,
+    "num_timesteps": 32,
+    "beta_start": 0.0001,
+    "beta_end": 0.1,
+    "schedule": "linear",
+    "use_text_conditioning": true,
+    "cond_token_dim": 32,
+    "batch_size": 8,
+    "learning_rate": 0.001,
+    "max_iters": 3000,
+    "vae_pretrain_iters": 600,
+    "seed": 1337,
+    "device": "cpu"
+  }
+}

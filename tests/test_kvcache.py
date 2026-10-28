@@ -125,3 +125,31 @@ def test_generate_with_cache_equals_generate_greedy():
     s2 = generate_with_cache(model, tok, prompt, max_new_tokens=8,
                              temperature=1.0, top_k=1)
     assert s1 == s2, f"full={s1!r} cached={s2!r}"
+
+
+def test_trained_checkpoint_cache_matches_full_through_rollover():
+    from pathlib import Path
+    import pytest
+    from helix.infer import load_model_and_tokenizer, generate, generate_with_cache
+    if not Path('artifacts/llm/ckpt-best.pt').is_file():
+        pytest.skip('trained artifact absent')
+    model, tok, _ = load_model_and_tokenizer('configs/helix-research.json', 'artifacts/llm/ckpt-best.pt')
+    # Prompt long enough to force cache reset and exact window re-priming.
+    for prompt in ('', 'q' * 120):
+        full = generate(model, tok, prompt, max_new_tokens=20, temperature=0)
+        cached = generate_with_cache(model, tok, prompt, max_new_tokens=20, temperature=0)
+        assert full == cached
+
+
+def test_stream_decoder_preserves_split_utf8(monkeypatch):
+    from types import SimpleNamespace
+    from helix.tokenizer import ByteLevelBPETokenizer
+    import helix.infer as infer
+    tok = ByteLevelBPETokenizer()
+    sequence = iter([0xC3, 0xA9, tok._id_for_bytes(b'<|endoftext|>')])
+    monkeypatch.setattr(infer, '_sample_next', lambda *args, **kwargs: torch.tensor([[next(sequence)]]))
+    class Fake:
+        config = SimpleNamespace(block_type='recurrent', block_size=32)
+        def eval(self): return self
+        def __call__(self, idx): return torch.zeros((1, idx.shape[1], len(tok))), None
+    assert ''.join(infer.stream_generate(Fake(), tok, 'x', max_new_tokens=3)) == 'é'

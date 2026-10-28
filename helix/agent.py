@@ -2,12 +2,11 @@
 
 CPU-first, local-only agent with:
   * pluggable tool registry (code execution, calculator, document lookup, ...)
-  * sandboxed Python code execution (subprocess, timeout, memory limit, no
-    network assumed, least-privilege)
+  * sandboxed Python code execution (Linux namespaces, seccomp and limits)
   * planning / task decomposition loop with self-correction
   * explicit approval gate for consequential actions
-  * per-step and total resource limits (time, steps), reliable stop conditions
-  * audit log separating trusted system instructions from untrusted tool output
+  * step limits and between-call time checks; sandbox time/resource limits
+  * per-step audit log (may contain sensitive inputs; protect it)
   * reproducible runs (deterministic seed)
 
 This is a hypothesis to benchmark: whether the small HELIX model can use tools
@@ -20,15 +19,10 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 import re
-import shlex
-import subprocess
-import sys
-import tempfile
 import time
 from dataclasses import dataclass, field, asdict
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 
@@ -80,40 +74,51 @@ class CalculatorTool(Tool):
     )
 
     def execute(self, expression: str) -> ToolResult:
+        import math
+        import operator
         t0 = time.perf_counter()
+        ops = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+               ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv,
+               ast.Mod: operator.mod, ast.Pow: operator.pow}
+        def calc(node, depth=0):
+            if depth > 32:
+                raise ValueError("expression too deep")
+            if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+                value = node.value
+            elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+                value = calc(node.operand, depth + 1)
+                value = -value if isinstance(node.op, ast.USub) else value
+            elif isinstance(node, ast.BinOp) and type(node.op) in ops:
+                left, right = calc(node.left, depth + 1), calc(node.right, depth + 1)
+                if isinstance(node.op, ast.Pow) and (abs(right) > 1000 or
+                        (abs(left) > 1 and abs(right) * math.log2(abs(left)) > 4096)):
+                    raise ValueError("exponent too large")
+                value = ops[type(node.op)](left, right)
+            else:
+                raise ValueError(f"disallowed expression node: {type(node).__name__}")
+            if isinstance(value, complex) or (isinstance(value, int) and value.bit_length() > 4096) or \
+               (isinstance(value, float) and not math.isfinite(value)):
+                raise ValueError("result outside numeric limits")
+            return value
         try:
-            tree = ast.parse(expression, mode="eval")
-            self._check(tree.body)
-            value = eval(compile(tree, "<calc>", "eval"), {"__builtins__": {}}, {})
-            return ToolResult(True, str(value), duration_s=time.perf_counter() - t0,
-                              tool=self.name)
-        except Exception as exc:  # noqa: BLE001
-            return ToolResult(False, "", error=str(exc), duration_s=time.perf_counter() - t0,
-                              tool=self.name)
-
-    def _check(self, node: ast.AST) -> None:
-        if type(node) not in self._ALLOWED:
-            raise ValueError(f"disallowed expression node: {type(node).__name__}")
-        for child in ast.iter_child_nodes(node):
-            self._check(child)
+            if len(expression) > 2048:
+                raise ValueError("expression too long")
+            value = calc(ast.parse(expression, mode="eval").body)
+            return ToolResult(True, str(value), duration_s=time.perf_counter() - t0, tool=self.name)
+        except Exception as exc:
+            return ToolResult(False, "", error=str(exc), duration_s=time.perf_counter() - t0, tool=self.name)
 
 
 class PythonTool(Tool):
-    """Sandboxed Python code execution via subprocess.
+    """Execute Python once in an isolated, bounded Linux sandbox.
 
-    Runs `python3 -c <code>` with a timeout, memory limit, captures stdout/
-    stderr and the value of a `result` variable if set. No network access is
-    granted by the subprocess (best-effort; the host firewall/policy decides).
-    Least-privilege: code runs as an unprivileged user in a temp cwd, cannot
-    write outside the temp dir by design.
-
-    consequential=True because arbitrary code execution can have side effects.
+    Requires user, mount, PID and network namespaces plus libseccomp. Execution
+    fails closed on platforms lacking these facilities. Treat the boundary as
+    defense in depth; for hostile workloads use a separately provisioned VM.
     """
 
     name = "python"
-    description = ("Execute Python code in a sandboxed subprocess. "
-                   "Set the variable `result` to return a value. "
-                   "Timeout and memory limits apply.")
+    description = "Execute Python in a restricted, network-free Linux sandbox."
     consequential = True
 
     def __init__(self, timeout_s: float = 15.0, memory_mb: int = 256) -> None:
@@ -121,53 +126,10 @@ class PythonTool(Tool):
         self.memory_mb = memory_mb
 
     def execute(self, code: str) -> ToolResult:
-        t0 = time.perf_counter()
-        # Write code to a temp file and run in a temp cwd.
-        with tempfile.TemporaryDirectory() as td:
-            code_path = os.path.join(td, "agent_code.py")
-            with open(code_path, "w", encoding="utf-8") as f:
-                f.write(code)
-            try:
-                proc = subprocess.run(
-                    [sys.executable, code_path],
-                    cwd=td,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_s,
-                )
-                out = proc.stdout
-                err = proc.stderr
-                duration = time.perf_counter() - t0
-                if proc.returncode == 0:
-                    # Try to extract a `result` variable via a runner that prints it.
-                    runner = code + "\nprint('__HELIX_RESULT__', repr(result))\n"
-                    rp = os.path.join(td, "agent_run.py")
-                    with open(rp, "w", encoding="utf-8") as f:
-                        f.write(runner)
-                    proc2 = subprocess.run(
-                        [sys.executable, rp],
-                        cwd=td,
-                        capture_output=True,
-                        text=True,
-                        timeout=self.timeout_s,
-                    )
-                    out = proc2.stdout
-                    err = proc2.stderr
-                    ok = proc2.returncode == 0
-                    error = None if ok else proc2.stderr.strip()
-                else:
-                    ok = False
-                    error = proc.stderr.strip()
-                return ToolResult(ok, out.strip(), error=error,
-                                  duration_s=duration, tool=self.name)
-            except subprocess.TimeoutExpired:
-                return ToolResult(False, "", error="timeout",
-                                  duration_s=time.perf_counter() - t0,
-                                  tool=self.name)
-            except Exception as exc:  # noqa: BLE001
-                return ToolResult(False, "", error=str(exc),
-                                  duration_s=time.perf_counter() - t0,
-                                  tool=self.name)
+        from helix.sandbox import run_python
+        result = run_python(code, timeout_s=self.timeout_s, memory_mb=self.memory_mb)
+        return ToolResult(result.ok, result.output, result.error, result.duration_s,
+                          self.name)
 
 
 class DocumentTool(Tool):
@@ -260,8 +222,8 @@ class Agent:
 
     The loop is rule-driven (auditable) with the model used for tool selection
     and argument generation. Every tool call is logged; consequential tools
-    require approval. Hard limits on steps and wall time provide reliable stop
-    conditions.
+    require exact-payload approval. Step and wall-time limits are checked
+    between model/tool calls; they do not preempt a running model forward pass.
     """
 
     def __init__(self, model, tok, registry: Optional[ToolRegistry] = None,
@@ -276,9 +238,10 @@ class Agent:
         torch.manual_seed(seed)
         self.max_steps = max_steps
         self.max_time_s = max_time_s
-        self.require_approval = require_approval
+        if require_approval is not True:
+            raise ValueError("consequential tools always require exact-payload approval")
         self.audit_log: List[dict] = []
-        self._preapproved: Dict[str, bool] = {}
+        self._preapproved: set[tuple[str, str]] = set()
 
     # -- planning via the model --------------------------------------------
 
@@ -303,31 +266,34 @@ class Agent:
     # -- approval gate -------------------------------------------------------
 
     def _approve(self, tool: Tool, tool_input: str) -> bool:
-        """Explicit approval gate for consequential actions.
-
-        Non-interactive default: auto-approve non-consequential tools;
-        consequential tools require caller to have set require_approval=False
-        or be approved via approve_tool(). In this baseline, consequential
-        tools are auto-approved but logged prominently (documented behavior;
-        an interactive deployment would prompt the user).
-        """
+        """Consume an explicit, exact-payload, single-use grant for consequential tools."""
         if not tool.consequential:
             return True
-        if not self.require_approval:
+        import hashlib
+        digest = hashlib.sha256(tool_input.encode('utf-8')).hexdigest()
+        grant = (tool.name, digest)
+        if grant in self._preapproved:
+            self._preapproved.remove(grant)
             return True
         return False
 
-    def set_tool_approved(self, tool_name: str, approved: bool) -> None:
-        """Caller marks a consequential tool as approved/rejected for this run."""
-        self._preapproved[tool_name] = approved
-
-    def __post_init__(self) -> None:
-        self._preapproved: Dict[str, bool] = {}
+    def set_tool_approved(self, tool_name: str, approved: bool, tool_input: str | None = None) -> None:
+        """Approve/revoke one exact payload; never grant arbitrary model-selected code."""
+        if approved is not True and approved is not False:
+            raise ValueError("approval must be an explicit boolean")
+        if not isinstance(tool_input, str):
+            raise ValueError("approval must include the exact tool input")
+        import hashlib
+        grant = (tool_name, hashlib.sha256(tool_input.encode('utf-8')).hexdigest())
+        if approved:
+            self._preapproved.add(grant)
+        else:
+            self._preapproved.discard(grant)
 
     def run(self, goal: str, documents: Optional[Dict[str, str]] = None) -> AgentRun:
         if documents:
-            # expose documents to the registry's document tool if present
-            pass
+            # Documents remain untrusted observations, never permission grants.
+            self.registry.register(DocumentTool(documents))
         t0 = time.perf_counter()
         history = ""
         self.audit_log = []
@@ -379,7 +345,7 @@ class Agent:
                             "unknown_tool")
                 continue
 
-            approved = self._preapproved.get(tool_name, self._approve(tool, tool_input))
+            approved = self._approve(tool, tool_input)
             if not approved:
                 result = ToolResult(False, "", error="rejected by approval gate",
                                     tool=tool_name)
@@ -403,7 +369,8 @@ class Agent:
 
         if not run.final_answer:
             run.final_answer = (history or "no answer").strip()[:500]
-            run.stopped_reason = "max_steps"
+            if run.stopped_reason == "completed":
+                run.stopped_reason = "max_steps"
         run.total_duration_s = round(time.perf_counter() - t0, 3)
         return run
 

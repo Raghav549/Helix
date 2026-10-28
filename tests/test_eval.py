@@ -57,3 +57,30 @@ def test_report_save_and_summary(tmp_path):
     data = json.load(open(path))
     assert data["total"] == 1
     assert "results" in data
+
+
+def test_long_context_does_not_count_prompt_echo(monkeypatch):
+    from types import SimpleNamespace
+    import helix.eval as evaluation
+    tok = ByteLevelBPETokenizer()
+    model = SimpleNamespace(config=SimpleNamespace(block_size=10000))
+    monkeypatch.setattr(evaluation, 'generate', lambda model, tok, prompt, **kw: prompt)
+    result = evaluation.LongContextRecallTask().run(model, tok, 'cpu', filler_lines=1)
+    assert not result.pass_ and result.details['completion'] == ''
+    monkeypatch.setattr(evaluation, 'generate', lambda model, tok, prompt, **kw: prompt + ' ALPHA-9921')
+    assert evaluation.LongContextRecallTask().run(model, tok, 'cpu', filler_lines=1).pass_
+    model.config.block_size = 10
+    assert not evaluation.LongContextRecallTask().run(model, tok, 'cpu', filler_lines=1).pass_
+
+
+def test_calibration_likelihood_uses_shifted_targets():
+    tok = ByteLevelBPETokenizer()
+    class CheckingModel:
+        calls = 0
+        def __call__(self, x, y):
+            self.calls += 1
+            assert torch.equal(x[:, 1:], y[:, :-1])
+            return None, torch.tensor(1.0 if self.calls == 1 else 2.0)
+    model = CheckingModel()
+    result = CalibrationTask().run(model, tok, 'cpu')
+    assert model.calls == 2 and result.pass_

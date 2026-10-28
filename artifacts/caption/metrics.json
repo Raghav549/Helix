@@ -1,0 +1,20 @@
+{
+  "stage": "synthetic_caption",
+  "initialization": "random vision encoder + HELIX-trained language checkpoint",
+  "parameters": 875584,
+  "base_checkpoint": "artifacts/llm/ckpt-best.pt",
+  "domain": "HELIX-rendered primitives only; no natural photo validation",
+  "seed": 42,
+  "train_examples": 240,
+  "heldout_examples": 90,
+  "steps": 800,
+  "batch_size": 16,
+  "initial_heldout_loss": 4.785244047641754,
+  "best_heldout_loss": 0.06093600648455322,
+  "selected_step": 700,
+  "exact_caption_accuracy": 0.7111111111111111,
+  "color_accuracy": 1.0,
+  "shape_accuracy": 0.9222222222222223,
+  "position_accuracy": 0.7222222222222222,
+  "elapsed_seconds": 29.26
+}

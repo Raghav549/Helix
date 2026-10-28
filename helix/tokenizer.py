@@ -7,8 +7,8 @@ Design notes
   byte level (UTF-8 decode uses errors="replace").
 * Merges are learned by frequency over the training corpus, exactly as in the
   original BPE / GPT-2 family. No external tokenizer library is required.
-* Special tokens are handled literally during training and encoding so they
-  never get split by merges.
+* Reserved special tokens are never merged into text. EOS is appended explicitly;
+  literal text resembling a special token remains ordinary text.
 """
 
 from __future__ import annotations
@@ -104,7 +104,12 @@ class ByteLevelBPETokenizer:
             if not stats:
                 break
             # Most frequent pair wins; ties broken by lower id1 then id2 for determinism.
-            pair, _ = max(stats.items(), key=lambda kv: (kv[1], -kv[0][0], -kv[0][1]))
+            reserved = set(special_ids.values())
+            eligible = [(pair, count) for pair, count in stats.items()
+                        if pair[0] not in reserved and pair[1] not in reserved]
+            if not eligible:
+                break
+            pair, _ = max(eligible, key=lambda kv: (kv[1], -kv[0][0], -kv[0][1]))
             id1, id2 = pair
             new_id = self._next_id
             self._next_id += 1
@@ -124,22 +129,16 @@ class ByteLevelBPETokenizer:
     # ---------------------------------------------------------------- encode/decode
     def encode(self, text: str, add_eos: bool = False) -> List[int]:
         ids: List[int] = list(text.encode("utf-8"))
-        # Iteratively merge the lowest-ranked adjacent pair until none remain.
+        # Merge all non-overlapping occurrences of the lowest-ranked pair at
+        # once. This is equivalent to left-to-right BPE and avoids rescanning
+        # an entire document for every individual token occurrence.
         while len(ids) >= 2:
-            best_rank = None
-            best_i = -1
-            best_pair: Optional[Tuple[int, int]] = None
-            for i in range(len(ids) - 1):
-                pair = (ids[i], ids[i + 1])
-                r = self.rank.get(pair)
-                if r is not None and (best_rank is None or r < best_rank):
-                    best_rank = r
-                    best_i = i
-                    best_pair = pair
-            if best_i < 0 or best_pair is None:
+            ranked = [(self.rank[pair], pair) for pair in zip(ids, ids[1:])
+                      if pair in self.rank]
+            if not ranked:
                 break
-            new_id = self.pair_to_new_id[best_pair]
-            ids = ids[:best_i] + [new_id] + ids[best_i + 2 :]
+            _, pair = min(ranked)
+            ids = self._merge(ids, pair, self.pair_to_new_id[pair])
         if add_eos:
             ids.append(self._id_for_bytes("<|endoftext|>".encode("utf-8")))
         return ids
