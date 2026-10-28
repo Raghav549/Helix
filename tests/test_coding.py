@@ -3,6 +3,8 @@
 import os
 import tempfile
 
+import pytest
+
 from helix.coding import (RepoInspector, StaticAnalyzer, PatchGenerator,
                           TestGenerator, CodingAgent, demo_code_fix)
 
