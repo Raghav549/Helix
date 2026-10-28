@@ -96,13 +96,22 @@ jobs:
       - name: Train HELIX from random initialization
         run: python -m helix train --config "$HELIX_DATA_ROOT/out/reproduce/llm-config.json"
 
+      - name: Generate reproducible instruction examples outside the repository
+        run: |
+          ROOT="$HELIX_DATA_ROOT/out/reproduce"
+          python scripts/generate_sft_pairs.py \
+            --base data/sft_pairs.json \
+            --output "$ROOT/sft-pairs.json" \
+            --manifest "$ROOT/sft-pairs-manifest.json" \
+            --seed 1337 --math-count 300 --code-count 80 --logic-count 80 --conversation-count 40
+
       - name: Instruction-tune the HELIX checkpoint
         run: |
           ROOT="$HELIX_DATA_ROOT/out/reproduce"
           python -m helix sft \
             --config "$ROOT/llm-config.json" \
             --base-checkpoint "$ROOT/llm/ckpt-best.pt" \
-            --sft-pairs "$GITHUB_WORKSPACE/data/sft_pairs.json" \
+            --sft-pairs "$ROOT/sft-pairs.json" \
             --out-dir "$ROOT/sft" \
             --max-iters "${{ inputs.sft_steps || '600' }}" \
             --block-size 128 --batch-size 6 --lr 0.0002
@@ -125,6 +134,7 @@ jobs:
             --merges "$ROOT/data/merges.json" \
             --config configs/helix-research.json \
             --evaluation "$ROOT/sft-eval.json" \
+            --sft-metrics "$ROOT/sft/sft-metrics.json" \
             --output "$ROOT/helix-chat-bundle.zip"
           sha256sum "$ROOT/helix-chat-bundle.zip" > "$ROOT/helix-chat-bundle.zip.sha256"
           cp "$ROOT/sft-eval.json" "$ROOT/evaluation-report.json"
@@ -137,6 +147,8 @@ jobs:
             /tmp/helix-training-data/out/reproduce/manifest.json
             /tmp/helix-training-data/out/reproduce/llm-config.json
             /tmp/helix-training-data/out/reproduce/sft-eval.json
+            /tmp/helix-training-data/out/reproduce/sft/sft-metrics.json
+            /tmp/helix-training-data/out/reproduce/sft-pairs-manifest.json
             /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip
             /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip.sha256
           if-no-files-found: error
@@ -156,5 +168,7 @@ jobs:
             /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip
             /tmp/helix-training-data/out/reproduce/helix-chat-bundle.zip.sha256
             /tmp/helix-training-data/out/reproduce/evaluation-report.json
+            /tmp/helix-training-data/out/reproduce/sft/sft-metrics.json
+            /tmp/helix-training-data/out/reproduce/sft-pairs-manifest.json
           fail_on_unmatched_files: true
           make_latest: false
