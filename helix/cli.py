@@ -75,6 +75,20 @@ def cmd_eval(args: argparse.Namespace) -> int:
             losses.append(loss.item())
     avg = float(np.mean(losses))
     print(f"eval_iters={args.eval_iters} val_loss={avg:.4f} perplexity={math.exp(avg):.2f}")
+
+    # Run the original, contamination-resistant evaluation tasks and write a
+    # JSON report alongside the perplexity number.
+    tasks = None
+    if args.eval_tasks:
+        tasks = [t.strip() for t in args.eval_tasks.split(",") if t.strip()]
+    try:
+        from helix.eval import run_eval
+        report = run_eval(args.config, args.checkpoint, args.out_path, tasks=tasks,
+                          device=cfg.train.device)
+        print(f"[eval] report: {report.summary()['passed']}/{report.summary()['total']} "
+              f"tasks passed -> {args.out_path}")
+    except Exception as exc:  # pragma: no cover - eval harness is best-effort
+        print(f"[eval] task-suite skipped: {exc}")
     return 0
 
 
@@ -158,6 +172,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument("--config", required=True)
     p_eval.add_argument("--checkpoint", required=True)
     p_eval.add_argument("--eval-iters", type=int, default=50)
+    p_eval.add_argument("--out-path", default="out/eval-report.json",
+                        help="path to write the JSON evaluation report")
+    p_eval.add_argument("--eval-tasks", default=None,
+                        help="comma-separated eval task names (default: all)")
     p_eval.set_defaults(func=cmd_eval)
 
     p_serve = sub.add_parser("serve", help="local HTTP generation server")
