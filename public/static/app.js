@@ -6,7 +6,13 @@ let activeChatController = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, options);
-  const data = await response.json();
+  const raw = await response.text();
+  let data;
+  try { data = raw ? JSON.parse(raw) : {}; }
+  catch (_) {
+    const excerpt = raw.replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 180);
+    throw new Error(`API route returned non-JSON (HTTP ${response.status}): ${excerpt || 'empty response'}`);
+  }
   if (!response.ok) throw new Error(data.error || data.result || `Request failed (${response.status})`);
   return data;
 }
@@ -67,7 +73,15 @@ $('#chat-form').addEventListener('submit', async (event) => {
   let reply = '';
   try {
     const response = await fetch('/api/chat/stream', {...jsonOptions({message: text, history: prior, use_memory: $('#use-memory').checked}), signal: controller.signal});
-    if (!response.ok) { const err = await response.json(); throw new Error(err.error || 'Chat unavailable'); }
+    if (!response.ok) {
+      const raw = await response.text();
+      let err = {};
+      try { err = JSON.parse(raw); } catch (_) {
+        const excerpt = raw.replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 180);
+        throw new Error(`API route returned non-JSON (HTTP ${response.status}): ${excerpt || 'empty response'}`);
+      }
+      throw new Error(err.error || 'Chat unavailable');
+    }
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
     while (true) {
       const part = await reader.read(); buffer += decoder.decode(part.value || new Uint8Array(), {stream: !part.done});
