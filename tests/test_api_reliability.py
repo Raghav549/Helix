@@ -84,13 +84,13 @@ def test_health_reports_degraded_when_model_artifacts_are_missing(client):
 
 
 def test_chat_without_artifacts_returns_actionable_json_503(client):
-    response = client.post('/api/chat', json={'message': 'hello'})
+    response = client.post('/api/chat', json={'message': 'Explain how a compiler works.'})
     assert response.status_code == 503
     body = _json(response)
     assert body['code'] == 'model_unavailable'
     assert body['retryable'] is False
     assert 'diagnostics' in body['detail']
-    stream = client.post('/api/chat/stream', json={'message': 'hello'})
+    stream = client.post('/api/chat/stream', json={'message': 'Explain how a compiler works.'})
     assert stream.status_code == 503 and stream.mimetype == 'application/json'
 
 
@@ -219,7 +219,7 @@ def test_streaming_generation_failure_is_a_json_error_event(tmp_path, monkeypatc
     monkeypatch.setattr(web.ModelCache, 'llm', fake_llm)
     monkeypatch.setattr(infer, 'stream_generate', failing_stream)
     client = _ready_app(tmp_path, monkeypatch).test_client()
-    response = client.post('/api/chat/stream', json={'message': 'hi'}, buffered=True)
+    response = client.post('/api/chat/stream', json={'message': 'Explain how a compiler works.'}, buffered=True)
     text = response.get_data(as_text=True)
     assert '"code": "generation_failed"' in text
     assert '/srv/helix' not in text, 'internal paths must not reach the browser'
