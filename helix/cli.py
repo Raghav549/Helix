@@ -19,7 +19,115 @@ def cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_generate(args: argparse.Namespace) -> int:
+def _resolve_artifact(path: str) -> str:
+    """Project-relative artifact paths resolve against the external data root
+    (same rule as training); absolute/paths that already exist pass through."""
+    if os.path.isfile(path):
+        return path
+    from helix.storage import resolve
+    candidate = str(resolve(path))
+    if os.path.isfile(candidate):
+        return candidate
+    return path
+
+
+def cmd_calibrate(args: argparse.Namespace) -> int:
+    from helix.infer import load_model_and_tokenizer
+    from helix.data import load_ids
+    from helix.refusal import calibrate_gate
+    cfg_path = args.config
+    ckpt = _resolve_artifact(args.checkpoint)
+    model, tok, cfg = load_model_and_tokenizer(cfg_path, ckpt)
+    val_ids = load_ids(cfg.data.val_file) if os.path.isfile(cfg.data.val_file) \
+        else load_ids(_resolve_artifact(cfg.data.val_file))
+    gate, stats = calibrate_gate(model, tok, val_ids, cfg,
+                                 n_batches=args.n_batches, seed=args.seed,
+                                 percentile=args.percentile,
+                                 device=cfg.train.device)
+    out = args.out_path
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    gate.save(out)
+    print(json.dumps({"gate": {"threshold": gate.threshold,
+                               "temperature": gate.temperature,
+                               "source": gate.source}, "stats": stats}, indent=2))
+    return 0
+
+
+def cmd_answer(args: argparse.Namespace) -> int:
+    """Confidence-gated answer: refuses instead of hallucinating."""
+    from helix.infer import load_model_and_tokenizer
+    from helix.refusal import ConfidenceGate
+    model, tok, cfg = load_model_and_tokenizer(
+        args.config, _resolve_artifact(args.checkpoint))
+    gate_path = _resolve_artifact(args.gate) if args.gate else None
+    if gate_path and os.path.isfile(gate_path):
+        gate = ConfidenceGate.load(gate_path)
+    else:
+        from helix.data import load_ids
+        val_file = cfg.data.val_file if os.path.isfile(cfg.data.val_file) \
+            else _resolve_artifact(cfg.data.val_file)
+        gate, _ = calibrate_gate_live(model, tok, val_file, cfg)
+    decision = gate.generate_gated(model, tok, args.prompt,
+                                   device=cfg.train.device,
+                                   max_new_tokens=args.max_new_tokens,
+                                   temperature=args.temperature)
+    print(json.dumps(decision.to_dict(), ensure_ascii=False, indent=2))
+    return 0 if decision.answered else 3
+
+
+def calibrate_gate_live(model, tok, val_file, cfg):
+    from helix.data import load_ids
+    from helix.refusal import calibrate_gate
+    return calibrate_gate(model, tok, load_ids(val_file), cfg)
+
+
+def cmd_loop(args: argparse.Namespace) -> int:
+    """Run the autonomous RAFT/self-rewarding improvement loop (data gen only)."""
+    from helix.infer import load_model_and_tokenizer
+    from helix.selfimprove import run_improvement_loop
+    from helix.autonomous import _prompts_from_corpus
+    from helix.data import load_ids
+    model, tok, cfg = load_model_and_tokenizer(
+        args.config, _resolve_artifact(args.checkpoint))
+    train_file = cfg.data.train_file if os.path.isfile(cfg.data.train_file) \
+        else _resolve_artifact(cfg.data.train_file)
+    prompts = _prompts_from_corpus(tok, load_ids(train_file), n=args.max_prompts)
+    reports = run_improvement_loop(model, tok, prompts, args.out_dir,
+                                   iterations=args.iterations,
+                                   samples_per_prompt=args.samples_per_prompt,
+                                   device=cfg.train.device, seed=args.seed)
+    print(json.dumps([r.to_dict() for r in reports], indent=2))
+    return 0
+
+
+def cmd_autonomous(args: argparse.Namespace) -> int:
+    from helix.autonomous import run_autonomous
+    report = run_autonomous(args.config, _resolve_artifact(args.checkpoint),
+                            args.out_dir, iterations=args.iterations,
+                            samples_per_prompt=args.samples_per_prompt,
+                            sft_iters=args.sft_iters, batch_size=args.batch_size,
+                            lr=args.lr, seed=args.seed,
+                            max_regression=args.max_regression)
+    print(json.dumps({"halted_reason": report.halted_reason,
+                      "final_checkpoint": report.final_checkpoint,
+                      "iterations": [asdict(i) for i in report.iterations]},
+                     indent=2))
+    return 1 if report.halted_reason else 0
+
+
+def cmd_curriculum(args: argparse.Namespace) -> int:
+    from helix.curriculum import build_plan
+    plan = build_plan(args.token_budget, vocab_size=args.vocab_size,
+                      block_size=args.block_size)
+    plan.save(args.out_path)
+    ready = sum(1 for s in plan.stages if s.status == "ready")
+    print(json.dumps({"stages": len(plan.stages), "ready": ready,
+                      "blocked_no_rights": len(plan.stages) - ready,
+                      "out": args.out_path, "notes": plan.notes}, indent=2))
+    return 0
+
+
+def cmd_train(args: argparse.Namespace) -> int:
     if args.quantize:
         from helix.infer import load_quantized_model_and_tokenizer, generate_quantized
 

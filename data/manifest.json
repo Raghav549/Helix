@@ -1,9 +1,9 @@
 {
   "version": "2.0",
-  "created_at": "2026-10-28T13:28:46Z",
+  "created_at": "2026-10-29T15:55:51Z",
   "sources": [
     {
-      "source_id": "8b677cf8b70b76352a57",
+      "source_id": "bc66d83f821e546a74c9",
       "name": "seed_corpus.txt",
       "url": "data/sources/helix/seed_corpus.txt",
       "fmt": "text",
@@ -13,7 +13,7 @@
         "train",
         "redistribute"
       ],
-      "retrieved_at": "2026-10-28T13:28:46Z",
+      "retrieved_at": "2026-10-29T15:55:51Z",
       "content_hash": "0328df09eec06dae7d5281158dad3e9e57033bde7f305ba34cca044adad80913",
       "size_bytes": 2258,
       "attribution": "HELIX contributors",
@@ -27,7 +27,7 @@
       "rights_confirmed": true
     },
     {
-      "source_id": "68c20c6fe01e8f9604fd",
+      "source_id": "ba3752b588aa3f1b5d0b",
       "name": "README.md",
       "url": "data/sources/nanogpt/README.md",
       "fmt": "text",
@@ -37,7 +37,7 @@
         "train",
         "redistribute"
       ],
-      "retrieved_at": "2026-10-28T13:28:46Z",
+      "retrieved_at": "2026-10-29T15:55:51Z",
       "content_hash": "8d969370683849a2cc4e46c81bf2449717f2daff657586888151933c3590f85f",
       "size_bytes": 13850,
       "attribution": "Andrej Karpathy / nanoGPT contributors",
@@ -51,7 +51,7 @@
       "rights_confirmed": true
     },
     {
-      "source_id": "d6ac0913ef4c03d48d0f",
+      "source_id": "1a3512321d38e46ac3c7",
       "name": "model.py",
       "url": "data/sources/nanogpt/model.py",
       "fmt": "code",
@@ -61,7 +61,7 @@
         "train",
         "redistribute"
       ],
-      "retrieved_at": "2026-10-28T13:28:46Z",
+      "retrieved_at": "2026-10-29T15:55:51Z",
       "content_hash": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c",
       "size_bytes": 16345,
       "attribution": "Andrej Karpathy / nanoGPT contributors",
@@ -75,7 +75,7 @@
       "rights_confirmed": true
     },
     {
-      "source_id": "7791d1c7be4bb3636b35",
+      "source_id": "cd47d594968c4a5407ba",
       "name": "train.py",
       "url": "data/sources/nanogpt/train.py",
       "fmt": "code",
@@ -85,7 +85,7 @@
         "train",
         "redistribute"
       ],
-      "retrieved_at": "2026-10-28T13:28:46Z",
+      "retrieved_at": "2026-10-29T15:55:51Z",
       "content_hash": "413bd97b40bb400a2a0d01230e2946f056c263ebac1b7281c2367d964a123085",
       "size_bytes": 14857,
       "attribution": "Andrej Karpathy / nanoGPT contributors",
@@ -99,7 +99,7 @@
       "rights_confirmed": true
     },
     {
-      "source_id": "7cab535b0e4de3bfa3db",
+      "source_id": "43ba43809bbaf804cfd7",
       "name": "basic_operations.rst",
       "url": "data/sources/sympy/basic_operations.rst",
       "fmt": "text",
@@ -109,7 +109,7 @@
         "train",
         "redistribute"
       ],
-      "retrieved_at": "2026-10-28T13:28:46Z",
+      "retrieved_at": "2026-10-29T15:55:51Z",
       "content_hash": "69a7a65c00f96e3bffb3657c360809eedce490112048fae8b021a9d0fb5b8529",
       "size_bytes": 7761,
       "attribution": "SymPy Development Team and contributors",
@@ -123,7 +123,7 @@
       "rights_confirmed": true
     },
     {
-      "source_id": "eb797dac28603fb2709b",
+      "source_id": "15f397f8a5541a19160a",
       "name": "calculus.rst",
       "url": "data/sources/sympy/calculus.rst",
       "fmt": "text",
@@ -133,7 +133,7 @@
         "train",
         "redistribute"
       ],
-      "retrieved_at": "2026-10-28T13:28:46Z",
+      "retrieved_at": "2026-10-29T15:55:51Z",
       "content_hash": "f9bdb960c84cef0e6e823816505e0d56f2289eba5254a1b990834ae8b5569a2d",
       "size_bytes": 13968,
       "attribution": "SymPy Development Team and contributors",
@@ -147,7 +147,7 @@
       "rights_confirmed": true
     },
     {
-      "source_id": "27a4a6d06fc366b6b4e7",
+      "source_id": "2580a1c1c4d944bed53b",
       "name": "intro.rst",
       "url": "data/sources/sympy/intro.rst",
       "fmt": "text",
@@ -157,7 +157,7 @@
         "train",
         "redistribute"
       ],
-      "retrieved_at": "2026-10-28T13:28:46Z",
+      "retrieved_at": "2026-10-29T15:55:51Z",
       "content_hash": "9651811bd8d26accc6e2f3e17f8ea34a638e155fa2fa3d8d0f7836c160678056",
       "size_bytes": 8455,
       "attribution": "SymPy Development Team and contributors",
@@ -171,7 +171,7 @@
       "rights_confirmed": true
     },
     {
-      "source_id": "a53fbcb39a71f5b667ee",
+      "source_id": "0ce6210c4b5c494b55d0",
       "name": "matrices.rst",
       "url": "data/sources/sympy/matrices.rst",
       "fmt": "text",
@@ -181,7 +181,7 @@
         "train",
         "redistribute"
       ],
-      "retrieved_at": "2026-10-28T13:28:46Z",
+      "retrieved_at": "2026-10-29T15:55:51Z",
       "content_hash": "d3b9607b0bd6366206dab4544a2a1ed26920974d31bacad35b51d99dd619a8d9",
       "size_bytes": 17871,
       "attribution": "SymPy Development Team and contributors",
@@ -195,7 +195,7 @@
       "rights_confirmed": true
     },
     {
-      "source_id": "0e705d8d39d123aa2119",
+      "source_id": "4e724777c878acc98e0c",
       "name": "solvers.rst",
       "url": "data/sources/sympy/solvers.rst",
       "fmt": "text",
@@ -205,7 +205,7 @@
         "train",
         "redistribute"
       ],
-      "retrieved_at": "2026-10-28T13:28:46Z",
+      "retrieved_at": "2026-10-29T15:55:51Z",
       "content_hash": "96a1743ae32a812dfc922eefe7138b9e2fb16d6afb60064d70c97865c5c3cab1",
       "size_bytes": 7508,
       "attribution": "SymPy Development Team and contributors",
