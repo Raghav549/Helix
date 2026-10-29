@@ -74,8 +74,10 @@ single non-streaming request and renders that reply, marked as a normal answer.
   badging, writes `apk.sha256` and uploads it as an artifact. Tagged signed builds are
   attached to a GitHub release.
 
-No APK is committed to this repository, and no unsigned release build is presented as
-installable. To produce a signed release, add `ANDROID_KEYSTORE_BASE64`,
+A CI run on commit `6b0326d` completed both jobs and uploaded the debug APK
+(`beta-by-helix-debug-unsigned-release`, ~53 MiB, artifact of run 40837220492), so the
+build path is proven end to end. That artefact is a debug build for testing, not a signed
+release, and no APK is committed to this repository. To produce a signed release, add `ANDROID_KEYSTORE_BASE64`,
 `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` as repository
 secrets; keystores and passwords must never be committed.
 

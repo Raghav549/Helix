@@ -30,7 +30,7 @@ lists the exact blockers. Nothing below is inferred from a dashboard status.
 | Render backend `helix-chat.onrender.com` | Still serving Render's "Application loading" HTML to `/healthz` and to `/api/status` via Vercel. The latest recorded Render deploy says success, but the service does not serve responses. |
 | Vercel frontend `helix-web-lemon.vercel.app` | Serves the page, but `/api/status` returns the upstream HTML interstitial, so the deployed backend is not answering even with the rewritten proxy. |
 | Production browser chat | Cannot pass until the Render service serves. The HTML-as-JSON failure mode is fixed and tested in this branch (proxy returns `503 render_cold_start` with JSON), but that code is not deployed from this branch. |
-| Android APK artifact | Built by `.github/workflows/mobile-android.yml`; no signed release exists until the signing secrets are added. No APK is committed. |
+| Android APK artifact | **Produced by CI**: run [40837220492](https://github.com/Raghav549/Helix/actions/runs/40837220492) built `assembleDebug` and uploaded the artifact `beta-by-helix-debug-unsigned-release` (55,995,560 bytes, expires 2026-11-12). It is a debug APK, not a signed release; no APK is committed to the repository. |
 | Model quality | Measured, not blocked: 1/5 probes pass, answers are frequently incoherent. Improvements beyond the current scale need more compute than a free CPU tier provides. |
 | Fortran kernels | `gfortran`/`f2py` unavailable in this environment, so only the pure-Python fallback ran; the benchmark reports `backend: "python"`. |
 

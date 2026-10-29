@@ -88,7 +88,7 @@ jobs:
             echo "No signing secrets configured; building a debug APK."
             echo "BUILD_VARIANT=assembleDebug" >> "$GITHUB_ENV"
             echo "APK_PATH=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
-            echo "ARTIFACT_SUFFIX=debug-unsigned-release" >> "$GITHUB_ENV"
+            echo "ARTIFACT_SUFFIX=debug" >> "$GITHUB_ENV"
             exit 0
           fi
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore

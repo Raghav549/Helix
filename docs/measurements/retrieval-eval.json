@@ -6,7 +6,7 @@
   ],
   "documents": 11,
   "chunks": 78,
-  "index_checksum": "4fcbd1640efc13a359ab864f7c6e19600f3a0c978e108964654f36275c58a1a4",
+  "index_checksum": "79f447ea25556936312276c92f18706b69e5e7f0ab6668f74caeb38d3fd922ba",
   "k": 4,
   "total": 12,
   "recall_at_1": 0.75,
@@ -31,17 +31,17 @@
         },
         {
           "source": "RESEARCH_LEDGER.md",
-          "score": 0.6315,
+          "score": 0.6313,
           "citation": "RESEARCH_LEDGER.md#chars=2292-2946"
         },
         {
           "source": "REPRODUCIBILITY.md",
-          "score": 0.612,
+          "score": 0.6119,
           "citation": "REPRODUCIBILITY.md#chars=3952-4758"
         },
         {
           "source": "MEASUREMENTS.md",
-          "score": 0.5843,
+          "score": 0.5842,
           "citation": "MEASUREMENTS.md#chars=8615-9102"
         }
       ]
@@ -55,22 +55,22 @@
       "top": [
         {
           "source": "STATUS.md",
-          "score": 0.7421,
-          "citation": "STATUS.md#chars=2811-3572"
+          "score": 0.7397,
+          "citation": "STATUS.md#chars=2805-3696"
         },
         {
           "source": "STATUS.md",
-          "score": 0.6312,
-          "citation": "STATUS.md#chars=2126-2931"
+          "score": 0.6327,
+          "citation": "STATUS.md#chars=2126-2925"
         },
         {
           "source": "STATUS.md",
-          "score": 0.5067,
-          "citation": "STATUS.md#chars=3452-4283"
+          "score": 0.5145,
+          "citation": "STATUS.md#chars=3576-4457"
         },
         {
           "source": "STATUS.md",
-          "score": 0.4837,
+          "score": 0.5045,
           "citation": "STATUS.md#chars=1384-2246"
         }
       ]
@@ -89,18 +89,18 @@
         },
         {
           "source": "STATUS.md",
-          "score": 0.5882,
-          "citation": "STATUS.md#chars=2811-3572"
+          "score": 0.5733,
+          "citation": "STATUS.md#chars=2805-3696"
         },
         {
           "source": "STATUS.md",
-          "score": 0.5559,
+          "score": 0.5558,
           "citation": "STATUS.md#chars=0-812"
         },
         {
           "source": "STATUS.md",
-          "score": 0.4545,
-          "citation": "STATUS.md#chars=2126-2931"
+          "score": 0.5497,
+          "citation": "STATUS.md#chars=3576-4457"
         }
       ]
     },
@@ -113,23 +113,23 @@
       "top": [
         {
           "source": "STATUS.md",
-          "score": 0.6632,
-          "citation": "STATUS.md#chars=3452-4283"
+          "score": 0.65,
+          "citation": "STATUS.md#chars=2805-3696"
+        },
+        {
+          "source": "STATUS.md",
+          "score": 0.6371,
+          "citation": "STATUS.md#chars=3576-4457"
         },
         {
           "source": "PROVENANCE.md",
-          "score": 0.5079,
+          "score": 0.5128,
           "citation": "PROVENANCE.md#chars=713-1237"
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.4573,
+          "score": 0.4615,
           "citation": "ARCHITECTURE.md#chars=0-589"
-        },
-        {
-          "source": "RESEARCH_LEDGER.md",
-          "score": 0.4481,
-          "citation": "RESEARCH_LEDGER.md#chars=2292-2946"
         }
       ]
     },
@@ -152,12 +152,12 @@
         },
         {
           "source": "SFT_DATA.md",
-          "score": 0.2941,
+          "score": 0.294,
           "citation": "SFT_DATA.md#chars=636-1497"
         },
         {
           "source": "MEASUREMENTS.md",
-          "score": 0.2915,
+          "score": 0.2914,
           "citation": "MEASUREMENTS.md#chars=8615-9102"
         }
       ]
@@ -176,7 +176,7 @@
         },
         {
           "source": "RESEARCH_LEDGER.md",
-          "score": 0.6861,
+          "score": 0.6859,
           "citation": "RESEARCH_LEDGER.md#chars=1940-2412"
         },
         {
@@ -205,17 +205,17 @@
         },
         {
           "source": "DATA_PIPELINE.md",
-          "score": 0.591,
+          "score": 0.5908,
           "citation": "DATA_PIPELINE.md#chars=1379-2213"
         },
         {
           "source": "SOURCE_PIPELINE.md",
-          "score": 0.5338,
+          "score": 0.5336,
           "citation": "SOURCE_PIPELINE.md#chars=1757-2587"
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.524,
+          "score": 0.5238,
           "citation": "ARCHITECTURE.md#chars=4030-4667"
         }
       ]
@@ -234,17 +234,17 @@
         },
         {
           "source": "RESEARCH_LEDGER.md",
-          "score": 0.5261,
+          "score": 0.5177,
           "citation": "RESEARCH_LEDGER.md#chars=0-862"
         },
         {
           "source": "MODEL_CARD.md",
-          "score": 0.4182,
+          "score": 0.4246,
           "citation": "MODEL_CARD.md#chars=2557-3373"
         },
         {
           "source": "MEASUREMENTS.md",
-          "score": 0.416,
+          "score": 0.41,
           "citation": "MEASUREMENTS.md#chars=5610-6297"
         }
       ]
@@ -268,7 +268,7 @@
         },
         {
           "source": "DATA_PIPELINE.md",
-          "score": 0.5925,
+          "score": 0.5923,
           "citation": "DATA_PIPELINE.md#chars=762-1499"
         },
         {
@@ -292,7 +292,7 @@
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.6461,
+          "score": 0.646,
           "citation": "ARCHITECTURE.md#chars=1896-2787"
         },
         {
@@ -326,7 +326,7 @@
         },
         {
           "source": "REPRODUCIBILITY.md",
-          "score": 0.4001,
+          "score": 0.4,
           "citation": "REPRODUCIBILITY.md#chars=4638-5253"
         },
         {
@@ -350,17 +350,17 @@
         },
         {
           "source": "MEASUREMENTS.md",
-          "score": 0.6542,
+          "score": 0.6576,
           "citation": "MEASUREMENTS.md#chars=5610-6297"
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.6177,
+          "score": 0.6207,
           "citation": "ARCHITECTURE.md#chars=4030-4667"
         },
         {
           "source": "REPRODUCIBILITY.md",
-          "score": 0.4585,
+          "score": 0.4569,
           "citation": "REPRODUCIBILITY.md#chars=0-734"
         }
       ]

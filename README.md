@@ -230,8 +230,10 @@ It checks HTML shell, `/api/health`, `/api/status`, JSON 404s, SSE framing (not 
 
 **Android.** See [mobile/README.md](mobile/README.md). CI
 (`.github/workflows/mobile-android.yml`) type-checks, tests, validates the Expo config
-and SDK dependency versions, then builds an APK and uploads it with a sha256. Signing
-material comes from repository secrets; no APK is committed to this repository.
+and SDK dependency versions, then builds an APK and uploads it with a sha256. A debug
+build has completed in CI (run 40837220492); a signed release requires the four signing
+secrets and is attached to a GitHub release only for tags. Signing material comes from
+repository secrets, and no APK is committed to this repository.
 
 ## Troubleshooting
 
