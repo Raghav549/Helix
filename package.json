@@ -1,0 +1,6 @@
+{
+  "name": "helix-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static HELIX interface with a server-side authenticated API proxy"
+}
