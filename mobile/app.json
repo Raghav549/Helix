@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "Beta by helix",
+    "slug": "beta-by-helix",
+    "version": "2.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "scheme": "betabyhelix",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.helix.beta"
+    },
+    "android": {
+      "package": "com.helix.beta",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "android.permission.INTERNET"
+      ],
+      "blockedPermissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Beta by helix can read an image you choose so the analysis tool can describe it."
+        }
+      ]
+    ],
+    "extra": {
+      "apiBaseUrl": "https://helix-web-lemon.vercel.app"
+    }
+  }
+}

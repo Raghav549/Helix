@@ -1,0 +1,35 @@
+{
+  "name": "beta-by-helix",
+  "version": "2.0.0",
+  "private": true,
+  "main": "index.ts",
+  "description": "Beta by helix Android client (Expo + React Native + TypeScript)",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit",
+    "build:logic": "tsc -p tsconfig.logic.json",
+    "test:logic": "npm run build:logic && node --test --test-timeout=20000 .build/tests/*.test.js",
+    "config:check": "expo config --type public"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~58.0.21",
+    "expo-constants": "~58.0.14",
+    "expo-image-picker": "~58.0.10",
+    "expo-linear-gradient": "~58.0.3",
+    "expo-secure-store": "~58.0.2",
+    "expo-status-bar": "~58.0.4",
+    "expo-system-ui": "~58.0.7",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.10.1",
+    "react-native-svg": "15.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "~19.3.0",
+    "babel-preset-expo": "~58.0.22",
+    "typescript": "~5.9.2"
+  }
+}
