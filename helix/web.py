@@ -319,11 +319,17 @@ def create_app(config_path: str = 'configs/helix-research.json',
     def agent_key_identity():
         configured = [value.strip() for value in os.getenv('HELIX_AGENT_INGEST_KEYS', '').split(',') if value.strip()]
         supplied = request.headers.get('X-HELIX-Agent-Key', '')
+        for index, value in enumerate(configured):
+            if supplied and hmac.compare_digest(supplied.encode('utf-8'), value.encode('utf-8')):
+                return f'agent-{index + 1}', None
+        # Browser/mobile users have already passed require_basic_auth before a
+        # route executes. Permit that authenticated owner session to use the UI
+        # even when no separate machine-agent key has been provisioned. In a
+        # local unauthenticated deployment, ingestion remains closed by default.
+        if require_auth:
+            return 'authenticated-owner', None
         if not configured:
             return None, 'agent_ingest_not_configured'
-        for index, value in enumerate(configured):
-            if hmac.compare_digest(supplied.encode('utf-8'), value.encode('utf-8')):
-                return f'agent-{index + 1}', None
         return None, 'invalid_agent_key'
 
     @app.before_request
