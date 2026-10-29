@@ -45,7 +45,9 @@ lists the exact blockers. Nothing below is inferred from a dashboard status.
    report this as "Backend outdated" instead of a parse error.
 2. **No production deploy credential for this branch.** Vercel and Render deploy from the
    default branch; this work sits on `arena/70d7f428-helix`. Merging the branch makes the
-   fixed proxy and client deployable.
+   fixed proxy and client deployable. `render.yaml` now sets `autoDeploy: yes` so future
+   merges reach Render, but the blueprint has to be synced in the Render dashboard once —
+   that still needs dashboard access.
 3. **Signing secrets for a releasable APK.** `ANDROID_KEYSTORE_BASE64`,
    `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. Without
    them, CI produces a debug APK only.
