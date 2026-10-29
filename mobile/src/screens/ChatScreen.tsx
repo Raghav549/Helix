@@ -381,7 +381,7 @@ export function ChatScreen() {
                 </Text>
                 <QuickActions onSelect={onQuickAction} disabled={busy} />
               </View>
-            ) : null
+            ) : undefined
           }
           contentContainerStyle={styles.list}
           onContentSizeChange={ensureVisible}
