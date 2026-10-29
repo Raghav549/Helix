@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AppState,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -16,7 +15,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { ApiError, HelixClient, type Credentials } from '../api/client';
-import { ActivityRow, type ActivityKind } from '../components/ActivityRow';
 import { Composer } from '../components/Composer';
 import { MessageBubble } from '../components/MessageBubble';
 import { QuickActions, type QuickAction } from '../components/QuickActions';
@@ -25,7 +23,6 @@ import { Sidebar } from '../components/Sidebar';
 import { Wordmark } from '../components/Logo';
 import { useTheme } from '../hooks/useTheme';
 import { formatAnalysis, quickActionPrompt } from '../lib/analysis';
-import { healthNotice, summarizeHealth } from '../lib/format';
 import { greetingFor, normalizeBaseUrl } from '../lib/sse';
 import {
   SessionRepository,
@@ -56,18 +53,12 @@ export function ChatScreen() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
-  const [activity, setActivity] = useState<ActivityKind>('idle');
-  const [startedAt, setStartedAt] = useState(0);
-  const [now, setNow] = useState(Date.now());
   const [toolsEnabled, setToolsEnabled] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [themeMode, setThemeMode] = useState<ThemeMode>('system');
+  const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [credentials, setCredentials] = useState<Credentials | null>(null);
-  const [health, setHealth] = useState<Record<string, unknown> | null>(null);
-  const [healthChecked, setHealthChecked] = useState(false);
-  const [healthError, setHealthError] = useState<{ kind?: string; message?: string } | null>(null);
   const cancelRef = useRef<{ cancelled: boolean } | null>(null);
   const sessionsRef = useRef<Session[]>([]);
   const listRef = useRef<FlatList<StoredMessage>>(null);
@@ -77,7 +68,6 @@ export function ChatScreen() {
   sessionsRef.current = sessions;
   const active = sessions.find((session) => session.id === activeId) ?? null;
   const messages = active?.messages ?? [];
-  const status = useMemo(() => summarizeHealth(health), [health]);
   const greeting = useMemo(() => greetingFor(new Date().getHours()), []);
 
   useEffect(() => {
@@ -108,39 +98,6 @@ export function ChatScreen() {
       mounted = false;
     };
   }, []);
-
-  const refreshHealth = useCallback(async () => {
-    try {
-      setHealth(await client.health());
-      setHealthError(null);
-    } catch (error) {
-      setHealth(null);
-      setHealthError(
-        error instanceof ApiError
-          ? { kind: error.kind, message: error.message }
-          : { kind: 'offline', message: error instanceof Error ? error.message : undefined },
-      );
-    } finally {
-      setHealthChecked(true);
-    }
-  }, [client]);
-
-  useEffect(() => {
-    void refreshHealth();
-  }, [refreshHealth]);
-
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void refreshHealth();
-    });
-    return () => sub.remove();
-  }, [refreshHealth]);
-
-  useEffect(() => {
-    if (!busy) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [busy]);
 
   const commit = useCallback((next: Session[]) => {
     const sorted = sortSessions(next);
@@ -195,9 +152,6 @@ export function ChatScreen() {
       ensureVisible();
 
       setBusy(true);
-      setActivity('thinking');
-      setStartedAt(Date.now());
-      setNow(Date.now());
       const cancelState = { cancelled: false };
       cancelRef.current = cancelState;
       let buffer = '';
@@ -210,10 +164,8 @@ export function ChatScreen() {
             onMeta: (meta) => {
               const sources = Array.isArray(meta.sources) ? meta.sources : [];
               if (sources.length > 0) {
-                setActivity('documents');
                 mutateSession(session.id, (item) => updateMessage(item, assistantId, { sources }));
               } else {
-                setActivity('generating');
               }
             },
             onDelta: (delta) => {
@@ -246,7 +198,6 @@ export function ChatScreen() {
       } finally {
         pendingContent.current.delete(assistantId);
         setBusy(false);
-        setActivity('idle');
         cancelRef.current = null;
         ensureVisible();
       }
@@ -307,9 +258,6 @@ export function ChatScreen() {
       appendMessage(item, { id: newId('m'), role: 'user', content: `Analyse this image: ${label}`, createdAt: Date.now() }),
     );
     setBusy(true);
-    setActivity('tool');
-    setStartedAt(Date.now());
-    setNow(Date.now());
     try {
       const payload = await client.analyzeImage({ uri: asset.uri, name: label, type: asset.mimeType ?? 'image/jpeg' });
       mutateSession(session.id, (item) =>
@@ -324,7 +272,6 @@ export function ChatScreen() {
       pushError(session.id, error instanceof ApiError ? error.message : 'The image tool could not be reached.');
     } finally {
       setBusy(false);
-      setActivity('idle');
       ensureVisible();
     }
   }, [busy, client, ensureSession, ensureVisible, mutateSession, pushError]);
@@ -427,29 +374,20 @@ export function ChatScreen() {
             <MessageBubble message={item} onRetry={item.error ? () => retry(item) : undefined} />
           )}
           ListHeaderComponent={
-            <View style={styles.intro}>
-              <Text style={[styles.greeting, { color: theme.palette.ink }]} accessibilityRole="header">{greeting}</Text>
-              <Text style={[styles.sub, { color: theme.palette.muted }]}>
-                Ask a question, or start with a task. Every card below runs a real HELIX endpoint.
-              </Text>
-              <QuickActions onSelect={onQuickAction} disabled={busy} />
-              {healthChecked && (
-                <View style={[styles.health, { borderColor: theme.palette.line, backgroundColor: theme.palette.paperSoft }]}>
-                  <Text style={[styles.healthText, { color: theme.palette.ink }]}>
-                    {healthNotice(baseUrl, status.tone, healthError) ?? `Connected to ${baseUrl}.`}
-                  </Text>
-                </View>
-              )}
-              <Text style={[styles.disclaimer, { color: theme.palette.mutedSoft }]}>
-                HELIX models are small and experimental; there is no live web search. Tool output is computed, not generated.
-              </Text>
-            </View>
+            messages.length === 0 ? (
+              <View style={styles.intro}>
+                <Text style={[styles.greeting, { color: theme.palette.ink }]} accessibilityRole="header">{greeting}</Text>
+                <Text style={[styles.sub, { color: theme.palette.muted }]}>
+                  How can I help you today?
+                </Text>
+                <QuickActions onSelect={onQuickAction} disabled={busy} />
+              </View>
+            ) : null
           }
           contentContainerStyle={styles.list}
           onContentSizeChange={ensureVisible}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
-          ListFooterComponent={<ActivityRow kind={busy ? activity : 'idle'} elapsedMs={busy ? now - startedAt : 0} />}
         />
 
         <View style={{ paddingBottom: Math.max(insets.bottom, 8) }}>
@@ -484,7 +422,6 @@ export function ChatScreen() {
         onDelete={deleteSession}
         themeMode={themeMode}
         onCycleTheme={cycleTheme}
-        status={status}
         onOpenSettings={() => {
           setDrawerOpen(false);
           setSettingsOpen(true);
@@ -522,7 +459,4 @@ const styles = StyleSheet.create({
   intro: { paddingTop: 14 },
   greeting: { fontSize: 30, fontWeight: '800', letterSpacing: -0.9, lineHeight: 36 },
   sub: { fontSize: 14.5, lineHeight: 21, marginTop: 8, marginBottom: 18 },
-  health: { borderWidth: 1, borderRadius: 14, padding: 12, marginTop: 16 },
-  healthText: { fontSize: 13, lineHeight: 19 },
-  disclaimer: { fontSize: 11.5, lineHeight: 17, marginTop: 14 },
 });
