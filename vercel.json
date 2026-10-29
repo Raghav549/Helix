@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/out/web_images/:path*",
+      "destination": "/api/out/web_images/:path*"
+    }
+  ]
+}
