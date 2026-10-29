@@ -178,7 +178,7 @@ async function main() {
   const oversized = await expectJson(results, base, '/api/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ message: 'x'.repeat(5 * 1024 * 1024) }),
+    body: JSON.stringify({ message: 'x'.repeat(Math.floor(4.2 * 1024 * 1024)) }),
   });
   record(results, 'POST /api/chat rejects oversized input', Boolean(
     oversized.response && oversized.response.status === 413 && oversized.kind === 'json'
