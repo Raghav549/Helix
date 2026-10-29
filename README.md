@@ -7,16 +7,23 @@ Android clients that expose them through one HTTP API. Everything runs from
 configuration in this repository; the language and image checkpoints are trained by
 HELIX itself on CPU, with no external pretrained weights and no paid inference service.
 
-**What to expect.** HELIX is a small, honestly measured research system, not a
-general-purpose assistant. Its 803,712-parameter model is trained from random
-initialisation on a ~103 KB documented corpus, and it is evaluated rather than assumed:
-validation loss 4.97, perplexity 144, and 1 of 5 capability probes passing (a
-true-vs-false calibration check). Free-form answers are frequently incoherent. The parts
-of the product that are reliable are the tools — SymPy mathematics, numeric forecasting,
-sandboxed code execution and local-document retrieval — and every answer that comes from
-a tool says which tool produced it. The learned image model produces blurry 32×32
-samples and was validated only on synthetic shapes, never on photographs. Verify all
-outputs; do not use them for safety-critical decisions.
+## Product capabilities and current model status
+
+HELIX is designed as a general-purpose AI workspace that combines conversational
+interaction with tools for mathematics, numeric forecasting, document retrieval,
+coding assistance, image experiments and research workflows. Capabilities are exposed
+through a shared API and web/Android clients; availability depends on the deployed
+configuration and each tool's readiness.
+
+The bundled language model is currently an experimental 803,712-parameter model trained
+from random initialization on an approximately 103 KB documented corpus. The recorded
+baseline reports validation loss 4.97, perplexity 144, and 1 of 5 capability probes
+passing (a true-vs-false calibration check). Free-form generation can be incoherent, so
+the product must not present this checkpoint as a frontier-grade conversational model.
+The image model produces 32×32 experimental samples and has only been evaluated on
+synthetic shapes. Deterministic tools such as SymPy and validated retrieval can provide
+more dependable results within their tested scope. Review the evaluation reports before
+using outputs for consequential decisions.
 
 ## Architecture
 

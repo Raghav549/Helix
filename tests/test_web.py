@@ -35,7 +35,7 @@ def client(app):
 def test_index_status_static_and_security_headers(client):
     response = client.get('/')
     assert response.status_code == 200
-    for text in (b'Beta by helix', b'New chat', b'History', b'Image studio', b'Research', b'Settings'):
+    for text in (b'Beta by helix', b'New chat', b'History', b'Image studio', b'Research', b'Knowledge Mill', b'Settings'):
         assert text in response.data
     assert response.headers['X-Content-Type-Options'] == 'nosniff'
     assert "script-src 'self'" in response.headers['Content-Security-Policy']
@@ -80,9 +80,9 @@ def test_chat_memory_only_when_opted_in(client, monkeypatch):
     monkeypatch.setattr(helix.infer, 'stream_generate', fake_stream)
     monkeypatch.setattr(web.ModelCache, 'llm', lambda self, config, checkpoint: (None, None, SimpleNamespace(train=SimpleNamespace(device='cpu'))))
     client.post('/api/memory', json={'text': 'private-locally-saved-note', 'consent': True})
-    assert client.post('/api/chat', json={'message': 'hello'}).status_code == 200
+    assert client.post('/api/chat', json={'message': 'Explain how a compiler works.'}).status_code == 200
     assert 'private-locally-saved-note' not in prompts[-1]
-    assert client.post('/api/chat', json={'message': 'hello', 'use_memory': True}).status_code == 200
+    assert client.post('/api/chat', json={'message': 'Explain a compiler using the saved note.', 'use_memory': True}).status_code == 200
     assert 'private-locally-saved-note' in prompts[-1]
 
 
@@ -204,3 +204,35 @@ def test_explicit_external_origin_allows_tls_offload_but_rejects_other_origins(t
 def test_invalid_external_origin_is_rejected(origin):
     with pytest.raises(ValueError, match='external_origin'):
         web.create_app(external_origin=origin)
+
+
+
+def test_knowledge_ingest_allows_authenticated_owner_without_agent_key(tmp_path, monkeypatch):
+    """The authenticated web UI can submit sources without a separate agent token."""
+    monkeypatch.setenv('HELIX_REQUIRE_AUTH', '1')
+    monkeypatch.setenv('HELIX_AUTH_USERNAME', 'test-owner')
+    monkeypatch.setenv('HELIX_AUTH_PASSWORD', 'test-password')
+    monkeypatch.setenv('HELIX_AGENT_INGEST_KEYS', '')
+    monkeypatch.setenv('HELIX_DATA_ROOT', str(tmp_path))
+    monkeypatch.setenv('HELIX_KNOWLEDGE_ROOT', str(tmp_path / 'knowledge'))
+    monkeypatch.setattr(web, 'PROJECT_ROOT', str(tmp_path))
+    monkeypatch.setattr(web, 'resolve_data_root', lambda *args, **kwargs: tmp_path)
+    app = web.create_app(
+        config_path=str(REPO / 'configs/helix-research.json'),
+        llm_checkpoint=str(REPO / 'artifacts/sft/sckpt-best.pt'),
+        image_gen_config=str(REPO / 'artifacts/image-gen/config.json'),
+        image_gen_checkpoint=str(REPO / 'artifacts/image-gen/ckpt-final.pt'),
+        vision_checkpoint=str(REPO / 'artifacts/vision/ckpt-final.pt'),
+        caption_dir=str(REPO / 'artifacts/caption'),
+    )
+    app.testing = True
+    response = app.test_client().post(
+        '/api/knowledge/ingest',
+        json={'text': 'A small test document for retrieval.', 'name': 'test.txt', 'license_note': 'test fixture'},
+        headers={'Origin': 'http://localhost'},
+        auth=('test-owner', 'test-password'),
+    )
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body['indexed'] is True
+    assert body['training_updated'] is False

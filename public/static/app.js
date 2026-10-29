@@ -23,7 +23,7 @@ const state = {
   status: null,
   activity: {},
   settings: {
-    theme: 'system',
+    theme: 'dark',
     reduceMotion: false,
     displayName: '',
     useSources: true,
@@ -267,7 +267,7 @@ function resetActivity(keep = []) {
 
 /* ------------------------------------------------------------------ views */
 
-const VIEW_TITLES = { chat: 'Chat', image: 'Image studio', code: 'Code', research: 'Research', settings: 'Settings' };
+const VIEW_TITLES = { chat: 'Chat', image: 'Image studio', code: 'Code', research: 'Research', knowledge: 'Knowledge Mill', settings: 'Settings' };
 
 function showView(view, options = {}) {
   if (!VIEW_TITLES[view]) view = 'chat';
@@ -287,6 +287,7 @@ function showView(view, options = {}) {
   document.title = view === 'chat' ? 'Beta by helix' : `${VIEW_TITLES[view]} · Beta by helix`;
   if (view !== 'chat') closeNav();
   if (view === 'research') { refreshExperiments(); refreshRetrievalStatus(); }
+  if (view === 'knowledge') { refreshKnowledge(); }
   if (view === 'settings') { renderMemory().catch(() => {}); }
   if (!options.silent && location.hash !== `#${view}`) {
     history.replaceState(null, '', `#${view}`);
@@ -488,6 +489,8 @@ function renderThread() {
   const container = $('#thread');
   container.replaceChildren();
   const thread = activeThread();
+  const chatView = $('#view-chat');
+  if (chatView) chatView.classList.toggle('has-messages', Boolean(thread && thread.messages.length));
   if (!thread || !thread.messages.length) {
     const empty = document.createElement('div');
     empty.className = 'thread-empty';
@@ -520,6 +523,8 @@ function appendMessage(message) {
   saveStore();
   renderHistory();
   if ($('#thread-empty')) $('#thread-empty').remove();
+  const chatView = $('#view-chat');
+  if (chatView) chatView.classList.add('has-messages');
   const node = messageNode(message);
   $('#thread').append(node);
   scrollThread();
@@ -1193,6 +1198,101 @@ async function refreshExperiments() {
   }
 }
 
+/* ---------------------------------------------------------- knowledge mill -- */
+
+async function refreshKnowledge() {
+  const status = $('#knowledge-status');
+  const docs = $('#knowledge-documents');
+  status.textContent = 'Checking knowledge storage and index…';
+  docs.replaceChildren();
+  try {
+    const [health, inventory] = await Promise.all([
+      requestJson('/api/knowledge/status', { timeoutMs: 20000 }),
+      requestJson('/api/knowledge/documents', { timeoutMs: 20000 }),
+    ]);
+    $('#knowledge-doc-count').textContent = String(health.documents ?? inventory.documents?.length ?? 0);
+    $('#knowledge-chunk-count').textContent = String(health.chunks ?? health.index?.chunks ?? '—');
+    status.textContent = health.configured
+      ? 'Storage and retrieval index are configured. New uploads update retrieval, not model weights.'
+      : 'Storage is not configured on this deployment.';
+    const list = Array.isArray(inventory.documents) ? inventory.documents : [];
+    if (!list.length) {
+      const empty = document.createElement('p');
+      empty.className = 'field-help';
+      empty.textContent = 'No sources have been added yet.';
+      docs.append(empty);
+    } else {
+      list.forEach((doc) => {
+        const item = document.createElement('article');
+        item.className = 'result-item';
+        const title = document.createElement('strong');
+        title.textContent = doc.original_name || doc.name || doc.filename || 'Untitled source';
+        const meta = document.createElement('span');
+        meta.className = 'result-source';
+        meta.textContent = [doc.state || (doc.indexed ? 'indexed' : 'stored'), doc.source_kind || doc.kind || 'source', doc.sha256 ? String(doc.sha256).slice(0, 12) : ''].filter(Boolean).join(' · ');
+        item.append(title, meta);
+        if (doc.source_url) {
+          const link = document.createElement('a');
+          link.href = doc.source_url;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = 'Open source';
+          item.append(link);
+        }
+        docs.append(item);
+      });
+    }
+  } catch (error) {
+    status.textContent = `Could not load inventory: ${error.message}${error.requestId ? ` (request ${error.requestId})` : ''}`;
+    $('#knowledge-doc-count').textContent = '—';
+    $('#knowledge-chunk-count').textContent = '—';
+  }
+}
+
+async function submitKnowledge(event) {
+  event.preventDefault();
+  const url = $('#knowledge-url').value.trim();
+  const text = $('#knowledge-text').value.trim();
+  const file = $('#knowledge-file').files?.[0];
+  const licenseNote = $('#knowledge-license').value.trim();
+  const result = $('#knowledge-result');
+  const button = $('#knowledge-submit');
+  if (Number(Boolean(url)) + Number(Boolean(text)) + Number(Boolean(file)) !== 1) {
+    result.textContent = 'Provide exactly one source: a URL, pasted text, or one file.';
+    return;
+  }
+  if (file && file.size > 4 * 1024 * 1024) {
+    result.textContent = 'This file exceeds the 4 MiB upload limit.';
+    return;
+  }
+  button.disabled = true;
+  result.textContent = 'Processing source, checking duplicates and updating the index…';
+  try {
+    let data;
+    if (file) {
+      const body = new FormData();
+      body.append('file', file);
+      body.append('license_note', licenseNote);
+      data = await requestJson('/api/knowledge/ingest', { method: 'POST', body, timeoutMs: 120000 });
+    } else if (url) {
+      data = await requestJson('/api/knowledge/ingest', { method: 'POST', json: { url, license_note: licenseNote }, timeoutMs: 120000 });
+    } else {
+      data = await requestJson('/api/knowledge/ingest', { method: 'POST', json: { text, name: 'pasted-notes.txt', license_note: licenseNote }, timeoutMs: 120000 });
+    }
+    result.textContent = data.notice || (data.indexed
+      ? 'Source stored and indexed for retrieval.'
+      : `Source stored with state: ${data.state || 'review required'}.`);
+    $('#knowledge-url').value = '';
+    $('#knowledge-text').value = '';
+    $('#knowledge-file').value = '';
+    await refreshKnowledge();
+  } catch (error) {
+    result.textContent = `Ingestion failed: ${error.message}${error.requestId ? ` (request ${error.requestId})` : ''}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 /* ------------------------------------------------------------ diagnostics -- */
 
 async function runDiagnostics() {
@@ -1432,7 +1532,7 @@ function bindEvents() {
     localStorage.removeItem(STORAGE.active);
     state.threads = [];
     state.activeThreadId = null;
-    state.settings = { theme: 'system', reduceMotion: false, displayName: '', useSources: true, useMemory: false };
+    state.settings = { theme: 'dark', reduceMotion: false, displayName: '', useSources: true, useMemory: false };
     saveStore();
     applyTheme();
     renderGreeting();
@@ -1440,6 +1540,8 @@ function bindEvents() {
     renderThread();
     toast('Local data cleared.', 'success');
   });
+  $('#knowledge-form').addEventListener('submit', submitKnowledge);
+  $('#knowledge-refresh').addEventListener('click', refreshKnowledge);
   $('#run-diagnostics').addEventListener('click', runDiagnostics);
   $('#memory-add').addEventListener('click', addMemory);
 

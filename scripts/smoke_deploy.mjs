@@ -145,7 +145,7 @@ async function main() {
       .filter(Boolean);
     const sawDone = events.some((event) => event.done === true);
     const sawError = events.some((event) => typeof event.error === 'string');
-    const ok = kind === 'sse' && !/<!doctype html|<html/i.test(text) && (sawDone || sawError);
+    const ok = kind === 'sse' && !/<!doctype html|<html/i.test(text) && sawDone && !sawError;
     record(results, 'POST /api/chat/stream (SSE, not HTML)', ok, {
       status: response.status,
       content_type: kind,
@@ -159,18 +159,32 @@ async function main() {
     record(results, 'POST /api/chat/stream (SSE, not HTML)', false, { error: error.message });
   }
 
-  // 6. Non-streaming chat for clients that cannot consume SSE.
-  await expectJson(results, base, '/api/chat', {
+  // 6. Non-streaming chat must return an actual answer, not merely valid JSON.
+  const chat = await expectJson(results, base, '/api/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ message: 'Say hello in five words or fewer.', max_new_tokens: 16 }),
+    body: JSON.stringify({ message: 'Explain recursion in one short sentence.', max_new_tokens: 24 }),
+  });
+  const chatReply = chat.parsed && (chat.parsed.reply || chat.parsed.answer);
+  record(results, 'POST /api/chat returns a non-empty answer', Boolean(
+    chat.response && chat.response.status === 200 && typeof chatReply === 'string' && chatReply.trim()
+  ), {
+    status: chat.response ? chat.response.status : null,
+    answer_chars: typeof chatReply === 'string' ? chatReply.trim().length : 0,
+    request_id: chat.parsed?.request_id || chat.response?.headers.get('x-request-id') || null,
   });
 
-  // 7. Oversized payloads must be rejected before the backend.
-  await expectJson(results, base, '/api/chat', {
+  // 7. Oversized payloads must be rejected as JSON before the backend.
+  const oversized = await expectJson(results, base, '/api/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ message: 'x'.repeat(5 * 1024 * 1024) }),
+  });
+  record(results, 'POST /api/chat rejects oversized input', Boolean(
+    oversized.response && oversized.response.status === 413 && oversized.kind === 'json'
+  ), {
+    status: oversized.response ? oversized.response.status : null,
+    content_type: oversized.kind,
   });
 
   const failed = results.filter((entry) => !entry.ok);

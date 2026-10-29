@@ -26,6 +26,10 @@ jobs:
           python -m pip install -e . pytest flake8
       - name: Check for Python syntax and undefined-name errors
         run: python -m flake8 helix scripts tests --count --select=E9,F63,F7,F82 --show-source --statistics
+      - name: Check browser JavaScript and proxy tests
+        run: |
+          node --check public/static/app.js
+          node --test tests/node/proxy.test.cjs
       - name: Run tests
         env:
           OMP_NUM_THREADS: "1"
