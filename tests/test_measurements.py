@@ -79,7 +79,7 @@ def test_measurements_document_references_the_committed_reports():
         assert (MEASUREMENTS / name).is_file()
     assert 'docs/measurements/' in text
     assert '803,712' in text
-    assert 'not a general' in text.lower() or 'do not show fluent' in text.lower()
+    assert 'free-form generation can be incoherent' in text.lower() or 'do not show fluent' in text.lower()
 
 
 def test_retrieval_report_matches_a_fresh_measurement():
