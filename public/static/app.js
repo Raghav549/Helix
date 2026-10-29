@@ -23,9 +23,9 @@ const state = {
   status: null,
   activity: {},
   settings: {
-    theme: 'dark',
+    theme: 'light',
     reduceMotion: false,
-    displayName: '',
+    displayName: 'Raghav',
     useSources: true,
     useMemory: false,
     agentMode: false,
@@ -254,9 +254,16 @@ function setActivity(kind, mode) {
   // mode: 'active' | 'done' | 'idle'
   state.activity[kind] = mode;
   const card = $(`.activity-card[data-activity="${kind}"]`);
-  if (!card) return;
-  card.classList.toggle('is-active', mode === 'active');
-  card.classList.toggle('is-done', mode === 'done');
+  if (card) {
+    card.classList.toggle('is-active', mode === 'active');
+    card.classList.toggle('is-done', mode === 'done');
+  }
+  const container = $('#activity-cards');
+  const anyActive = ['thinking', 'generating', 'image', 'searching']
+    .some((k) => state.activity[k] === 'active');
+  if (container) {
+    container.hidden = !anyActive;
+  }
 }
 
 function resetActivity(keep = []) {
@@ -341,7 +348,17 @@ function renderGreeting() {
   const hour = new Date().getHours();
   const part = hour < 5 ? 'night' : hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
   const name = (state.settings.displayName || '').trim();
-  $('#greeting-title').textContent = name ? `Good ${part}, ${name}.` : `Good ${part}.`;
+  const title = $('#greeting-title');
+  const nameNode = $('#greeting-name');
+  if (name) {
+    title.innerHTML = `Good ${part}, <span id="greeting-name">${escapeHtml(name)}</span>`;
+  } else {
+    title.innerHTML = `Good ${part}.`;
+  }
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 /* -------------------------------------------------------------- history -- */

@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="/static/styles.css">
   <script defer src="/static/app.js"></script>
 </head>
-<body data-theme="dark">
+<body data-theme="light">
   <a class="skip-link" href="#composer-input">Skip to message composer</a>
 
   <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
@@ -47,8 +47,8 @@
     <aside class="sidebar" id="sidebar" aria-label="Workspace navigation">
       <div class="sidebar-top">
         <a class="brand" href="/" aria-label="Beta by helix home">
-          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><use href="#i-helix"/></svg></span>
-          <span class="brand-text"><strong>beta</strong><span>by helix</span></span>
+          <span class="brand-mark" aria-hidden="true"><img src="/static/logo.svg" alt="" width="32" height="32"></span>
+          <span class="brand-text"><strong>Beta</strong><span>by helix</span></span>
         </a>
         <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="Close navigation">
           <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-close"/></svg>
@@ -110,7 +110,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-menu"/></svg>
         </button>
         <div class="topbar-title">
-          <span class="topbar-brand">beta <em>by helix</em></span>
+          <span class="topbar-brand"><img src="/static/logo.svg" alt="" width="16" height="16" style="vertical-align:middle;margin-right:6px">beta <em>by helix</em></span>
           <h1 id="view-title">Chat</h1>
         </div>
         <div class="topbar-actions">
@@ -132,8 +132,8 @@
         <section class="view view-chat is-active" id="view-chat" aria-label="Chat">
           <div class="greeting" id="greeting-block">
             <p class="greeting-kicker">Beta by helix</p>
-            <h2 class="greeting-title" id="greeting-title">Good evening.</h2>
-            <p class="greeting-sub">What would you like to make, understand or verify today?</p>
+            <h2 class="greeting-title" id="greeting-title">Good morning, <span id="greeting-name">Raghav</span></h2>
+            <p class="greeting-sub">How can I help you today?</p>
           </div>
 
           <div class="quick-actions" id="quick-actions" role="list" aria-label="Quick actions">
@@ -176,61 +176,68 @@
             </div>
           </div>
 
-          <div class="composer-dock">
-            <div class="composer-glow" aria-hidden="true"></div>
-            <form class="composer" id="composer" autocomplete="off">
-              <label class="sr-only" for="composer-input">Message Beta by helix</label>
-              <textarea id="composer-input" name="message" rows="1" maxlength="4000"
-                        placeholder="Ask anything, or drop a file to analyze…" required></textarea>
-              <div class="attachment-tray" id="attachment-tray" hidden></div>
-              <div class="composer-controls">
-                <div class="composer-left">
-                  <button class="icon-button" id="agent-toggle" type="button" aria-pressed="false"
-                          title="Route this message through tool orchestration (math, forecast, sources, code)">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spark"/></svg>
-                    <span class="sr-only">Use tools for this message</span>
-                  </button>
-                  <label class="icon-button" for="file-input" title="Attach an image (PNG, JPEG or WebP, up to 6 MiB)">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-attach"/></svg>
-                    <span class="sr-only">Attach an image</span>
-                  </label>
-                  <input class="sr-only" id="file-input" type="file" accept="image/png,image/jpeg,image/webp">
-                  <button class="icon-button" id="voice-button" type="button" title="Dictate a message" aria-pressed="false">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mic"/></svg>
-                    <span class="sr-only">Dictate a message</span>
-                  </button>
-                  <button class="icon-button" id="composer-image" type="button" title="Open the image studio">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-image"/></svg>
-                    <span class="sr-only">Open the image studio</span>
-                  </button>
-                  <span class="composer-hint" id="composer-hint">Enter to send · Shift+Enter for a new line</span>
-                </div>
-                <div class="composer-right">
-                  <button class="icon-button stop-button" id="stop-button" type="button" hidden title="Stop generating">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-stop"/></svg>
-                    <span class="sr-only">Stop generating</span>
-                  </button>
-                  <button class="send-button" id="send-button" type="submit">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-send"/></svg>
-                    <span class="sr-only">Send message</span>
-                  </button>
-                </div>
+          <form class="composer" id="composer" autocomplete="off">
+            <label class="sr-only" for="composer-input">Message Beta by helix</label>
+            <div class="composer-inner">
+              <div class="composer-left">
+                <button class="icon-button" id="agent-toggle" type="button" aria-pressed="false"
+                        title="Route this message through tool orchestration (math, forecast, sources, code)">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spark"/></svg>
+                  <span class="sr-only">Use tools for this message</span>
+                </button>
+                <label class="icon-button" for="file-input" title="Attach an image (PNG, JPEG or WebP, up to 6 MiB)">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-attach"/></svg>
+                  <span class="sr-only">Attach an image</span>
+                </label>
+                <input class="sr-only" id="file-input" type="file" accept="image/png,image/jpeg,image/webp">
+                <button class="icon-button" id="voice-button" type="button" title="Dictate a message" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mic"/></svg>
+                  <span class="sr-only">Dictate a message</span>
+                </button>
+                <button class="icon-button" id="composer-image" type="button" title="Open the image studio">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-image"/></svg>
+                  <span class="sr-only">Open the image studio</span>
+                </button>
               </div>
-            </form>
-          </div>
+              <div class="composer-field">
+                <textarea id="composer-input" name="message" rows="1" maxlength="4000"
+                          placeholder="Ask anything…" required></textarea>
+              </div>
+              <div class="composer-right">
+                <div class="attachment-tray" id="attachment-tray" hidden></div>
+                <button class="icon-button stop-button" id="stop-button" type="button" hidden title="Stop generating">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-stop"/></svg>
+                  <span class="sr-only">Stop generating</span>
+                </button>
+                <button class="send-button" id="send-button" type="submit">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-send"/></svg>
+                  <span class="sr-only">Send message</span>
+                </button>
+              </div>
+            </div>
+            <span class="composer-hint" id="composer-hint">Enter to send · Shift+Enter for a new line</span>
+          </form>
 
-          <div class="activity-row" id="activity-row" aria-label="Live activity">
+          <div class="activity-cards" id="activity-cards" aria-label="Live activity" hidden>
             <div class="activity-card" data-activity="thinking">
-              <span class="activity-orb" aria-hidden="true"></span><span>Thinking</span>
+              <div class="activity-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spark"/></svg></div>
+              <div class="activity-text"><strong>Thinking…</strong><span>Analyzing your request</span></div>
+              <div class="activity-progress"><div class="activity-bar"></div></div>
             </div>
             <div class="activity-card" data-activity="generating">
-              <span class="activity-orb" aria-hidden="true"></span><span>Generating response</span>
+              <div class="activity-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-brainstorm"/></svg></div>
+              <div class="activity-text"><strong>Generating response…</strong><span>Almost there…</span></div>
+              <div class="activity-progress"><div class="activity-bar"></div></div>
             </div>
             <div class="activity-card" data-activity="image">
-              <span class="activity-orb" aria-hidden="true"></span><span>Creating image</span>
+              <div class="activity-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-image"/></svg></div>
+              <div class="activity-text"><strong>Creating image…</strong><span>Bringing your idea to life…</span></div>
+              <div class="activity-progress"><div class="activity-bar" style="width:70%"></div><span class="activity-pct">70%</span></div>
             </div>
             <div class="activity-card" data-activity="searching">
-              <span class="activity-orb" aria-hidden="true"></span><span>Searching sources</span>
+              <div class="activity-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg></div>
+              <div class="activity-text"><strong>Searching the web…</strong><span>Finding the best results…</span></div>
+              <div class="activity-progress"><div class="activity-bar"></div></div>
             </div>
           </div>
           <p class="fine-print">Use available tools and indexed sources when enabled. Verify important answers; tool results identify their evidence.</p>

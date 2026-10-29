@@ -698,3 +698,121 @@ input[type="range"] { width: 100%; accent-color: var(--pink); }
 #knowledge-documents .result-item { display: flex; flex-direction: column; gap: 5px; }
 #knowledge-documents a { color: var(--pink); overflow-wrap: anywhere; }
 #knowledge-form textarea { width: 100%; min-height: 150px; resize: vertical; }
+
+/* ============================================================================
+   Light theme — matches the HELIX reference (white paper, pink/orange gradient)
+   ============================================================================ */
+[data-theme="light"] {
+  --paper: #ffffff;
+  --paper-soft: #faf7f9;
+  --paper-tint: #f5eeef;
+  --ink: #1a1a1a;
+  --ink-soft: #4a4a4a;
+  --muted: #8a8a8a;
+  --muted-soft: #b7b7b7;
+  --line: #e9e4e8;
+  --line-strong: #d8cfd4;
+  --pink: #ff2f86;
+  --pink-soft: #ffe3ee;
+  --magenta: #e23aa9;
+  --coral: #ff6a56;
+  --orange: #ffa63d;
+  --success: #17a673;
+  --warning: #c9761a;
+  --danger: #d8385a;
+
+  --gradient-primary: linear-gradient(135deg, var(--pink) 0%, var(--coral) 55%, var(--orange) 100%);
+  --gradient-soft: linear-gradient(135deg, rgba(255, 47, 134, 0.12), rgba(255, 106, 86, 0.10) 50%, rgba(255, 166, 61, 0.12));
+  --gradient-wave: conic-gradient(from 200deg at 50% 50%,
+      rgba(255, 47, 134, 0.5), rgba(255, 106, 86, 0.45), rgba(255, 166, 61, 0.4),
+      rgba(255, 47, 134, 0.3), rgba(255, 106, 86, 0.5));
+
+  --shadow-xs: 0 1px 2px rgba(26, 26, 26, 0.06);
+  --shadow-sm: 0 4px 16px rgba(26, 26, 26, 0.07);
+  --shadow-md: 0 12px 32px rgba(26, 26, 26, 0.10);
+  --shadow-glow: 0 18px 60px rgba(255, 47, 134, 0.16);
+}
+
+/* ---- brand mark ---- */
+.brand-mark img { width: 34px; height: 34px; border-radius: 10px; display: block; }
+.topbar-brand img { width: 20px; height: 20px; border-radius: 6px; display: block; margin-right: 8px; vertical-align: middle; }
+
+/* ---- greeting: name in gradient ---- */
+.greeting-title { font-size: var(--text-xl); font-weight: 700; letter-spacing: -0.035em; line-height: 1.1; }
+.greeting-title > span {
+  background: var(--gradient-primary);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* ---- quick action cards (reference style) ---- */
+.quick-card {
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  padding: 1rem 1.1rem;
+}
+.quick-icon { background: var(--paper); border: 1px solid var(--line); }
+.quick-text strong { color: var(--ink); }
+.quick-text small { color: var(--muted); }
+
+/* ---- composer: pill-shaped with pink send button ---- */
+.composer {
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 22px;
+  padding: 0.75rem 1rem;
+  box-shadow: var(--shadow-xs);
+}
+.composer:focus-within { border-color: var(--pink); box-shadow: var(--shadow-sm), 0 0 0 4px rgba(255, 47, 134, 0.12); }
+.composer-inner { display: flex; align-items: center; gap: var(--space-3); }
+.composer-field { flex: 1; min-width: 0; }
+.composer textarea { min-height: 44px; max-height: 110px; padding: 0.55rem 0; font-size: var(--text-base); }
+.composer-left { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.composer-left .icon-button { width: 36px; height: 36px; border-radius: 12px; border: 1px solid var(--line); background: var(--paper-soft); color: var(--muted); }
+.composer-left .icon-button svg { width: 18px; height: 18px; }
+.composer-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.composer-right .icon-button { width: 36px; height: 36px; border-radius: 12px; border: 1px solid var(--line); background: var(--paper-soft); color: var(--muted); }
+.composer-right .icon-button svg { width: 18px; height: 18px; }
+.composer-right .stop-button { color: var(--danger); border-color: var(--line); }
+.send-button {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--gradient-primary); color: #fff; box-shadow: var(--shadow-glow);
+  display: grid; place-items: center;
+}
+.send-button svg { width: 22px; height: 22px; }
+.send-button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+.composer-hint { font-size: 0.6875rem; color: var(--muted-soft); margin-top: 6px; }
+
+/* ---- activity cards (reference style) ---- */
+.activity-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-3); padding: var(--space-3) 0; }
+.activity-card {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-3); background: var(--paper-soft);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+}
+.activity-icon { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); }
+.activity-icon svg { width: 18px; height: 18px; color: var(--pink); }
+.activity-text { display: flex; flex-direction: column; gap: 2px; }
+.activity-text strong { font-size: var(--text-sm); color: var(--ink); }
+.activity-text span { font-size: var(--text-xs); color: var(--muted); }
+.activity-progress { display: flex; align-items: center; gap: var(--space-2); }
+.activity-bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.activity-bar::before { content: ""; display: block; height: 100%; background: var(--gradient-primary); width: 40%; animation: activity-pulse 1.6s ease-in-out infinite; }
+.activity-pct { font-size: var(--text-xs); color: var(--muted); width: 28px; text-align: right; flex-shrink: 0; }
+@keyframes activity-pulse { 0%,100%{transform:scaleX(0.35);transform-origin:left;opacity:0.7} 50%{transform:scaleX(1);transform-origin:left;opacity:1} }
+
+/* keep composer dock unsticky in reference layout */
+.composer-dock { position: static; background: transparent; padding: var(--space-4) 0 0; box-shadow: none; }
+
+/* mobile tweaks for reference layout */
+@media (max-width: 760px) {
+  .activity-cards { grid-template-columns: repeat(2, 1fr); gap: var(--space-2); }
+  .activity-card { padding: var(--space-2); }
+  .composer { border-radius: 16px; padding: 0.6rem 0.9rem; }
+  .send-button { width: 40px; height: 40px; }
+}
+
+/* reduced motion disables activity pulse */
+@media (prefers-reduced-motion: reduce), [data-motion="reduced"] {
+  .activity-bar::before { animation: none; width: 40%; }
+}
