@@ -48,7 +48,8 @@ const repo = new SessionRepository(AsyncStorage);
 
 export function ChatScreen() {
   const insets = useSafeAreaInsets();
-  const theme = useTheme();
+  const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
+  const theme = useTheme(themeMode);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -56,7 +57,6 @@ export function ChatScreen() {
   const [toolsEnabled, setToolsEnabled] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const cancelRef = useRef<{ cancelled: boolean } | null>(null);
