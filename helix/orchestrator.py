@@ -34,6 +34,10 @@ _MATH_HINTS = re.compile(
     r"(?i)\b(differentiat\w*|integr\w*|derivative|solve|simplif\w*|limit|equation|"
     r"algebra|symbolic|x\s*\*{2}\s*\d|\\frac)\b")
 _FORECAST_HINTS = re.compile(r"(?i)\b(forecast|predict|trend|projection|time series|extrapolat\w*)\b")
+_AR_HINTS = re.compile(r"(?i)\b(autoregress\w*|ar\(\s*\d+\s*\)|self.?generat\w*|own past|lags?)\b")
+_MLR_HINTS = re.compile(r"(?i)\b(multiple regression|multivariate|features|columns?|regress\w+.*on|predict.*from.*data)\b")
+_POLY_HINTS = re.compile(r"(?i)\b(polynomial|curve fit|quadratic|cubic|detrend)\b")
+_CORR_HINTS = re.compile(r"(?i)\b(correlation|correlat\w*|correlat\w+ matrix|relationship between)\b")
 _SEARCH_HINTS = re.compile(r"(?i)\b(find|search|source|sources|cite|citation|according to|document|documents|index|evidence)\b")
 _CODE_HINTS = re.compile(r"(?i)\b(run|execute|traceback|exception|script|function|python|debug|refactor)\b")
 
@@ -89,6 +93,14 @@ def classify(message: str) -> str:
         return 'empty'
     if _MATH_HINTS.search(text):
         return 'math'
+    if _AR_HINTS.search(text):
+        return 'ar_forecast'
+    if _MLR_HINTS.search(text):
+        return 'multiple_regression'
+    if _POLY_HINTS.search(text):
+        return 'poly_trend'
+    if _CORR_HINTS.search(text):
+        return 'correlation'
     if _FORECAST_HINTS.search(text):
         return 'forecast'
     if _SEARCH_HINTS.search(text):
@@ -113,6 +125,10 @@ class Orchestrator:
     PERMISSIONS = {
         'symbolic_math': READ_ONLY,
         'linear_forecast': READ_ONLY,
+        'ar_forecast': READ_ONLY,
+        'multiple_regression': READ_ONLY,
+        'poly_trend': READ_ONLY,
+        'correlation': READ_ONLY,
         'document_search': READ_ONLY,
         'code_execution': APPROVAL_REQUIRED,
     }
@@ -139,6 +155,18 @@ class Orchestrator:
         if classification == 'forecast':
             return Plan(classification, ['parse numeric series', 'fit and score trend', 'report forecast with interval'],
                         ['linear_forecast'])
+        if classification == 'ar_forecast':
+            return Plan(classification, ['parse numeric series', 'fit AR(p) from the series own past', 'report autoregressive forecast'],
+                        ['ar_forecast'])
+        if classification == 'multiple_regression':
+            return Plan(classification, ['parse feature columns and target', 'fit multiple linear regression', 'report coefficients and prediction'],
+                        ['multiple_regression'])
+        if classification == 'poly_trend':
+            return Plan(classification, ['fit polynomial trend by least squares', 'report coefficients and forecast'],
+                        ['poly_trend'])
+        if classification == 'correlation':
+            return Plan(classification, ['compute Pearson correlation matrix', 'report the strongest relationships'],
+                        ['correlation'])
         if classification == 'search':
             tools = ['document_search'] if self.documents_available else []
             steps = ['search local document index', 'cite the retrieved passages'] if tools else \
@@ -243,6 +271,81 @@ class Orchestrator:
                     result.limitations.extend(output['assumptions'])
                 else:
                     result.answer = 'The numeric forecast tool did not produce a usable result.'
+
+        elif plan.classification == 'ar_forecast':
+            if not series:
+                result.answer = ('AR forecasting needs at least four numeric points. Send them as '
+                                 '`series` (a list of numbers) and optionally `p` (the lag count).')
+                result.limitations.append('no numeric series was supplied')
+            else:
+                ar_p = 2
+                output = self._call(result, 'ar_forecast',
+                                    {'series': series, 'p': ar_p, 'steps': max(1, int(horizon))},
+                                    True, str(len(series)))
+                if output:
+                    fc = output['forecasts']
+                    result.answer = (
+                        f'AR({output["p"]}) autoregressive forecast from the series\' own past: '
+                        f'next value {fc[0]:.4g} at step {output["points_used"] + 1:.0f}. '
+                        f'Horizon {output["steps"]}: ' + ', '.join(f'{v:.4g}' for v in fc[:5]) +
+                        (f' ... ({output["steps"] - 5} more)' if output['steps'] > 5 else '') +
+                        f'. Computed by helix.numerics ({output["backend"]} backend).')
+                    result.limitations.extend(output.get('assumptions', []))
+                else:
+                    result.answer = 'The AR forecast tool did not produce a usable result.'
+
+        elif plan.classification == 'multiple_regression':
+            output = self._call(result, 'multiple_regression',
+                                {'X': [], 'y': series}, True, str(len(series) if series else 0))
+            if output:
+                result.answer = (
+                    f'Multiple linear regression on {output["points_used"]} points, '
+                    f'{output["features"]} features: intercept {output["intercept"]:.4g}, '
+                    f'beta ' + ', '.join(f'{b:.4g}' for b in output['beta']) +
+                    f'. Residual SD {output["residual_sd"]:.4g}, R² {output["r2"]:.4g}. '
+                    f'Computed by helix.numerics ({output["backend"]} backend).')
+                result.limitations.extend(output['limitations'])
+            else:
+                result.answer = 'The multiple regression tool did not produce a usable result.'
+
+        elif plan.classification == 'poly_trend':
+            if not series:
+                result.answer = ('Polynomial trend fitting needs at least five numeric points. '
+                                 'Send them as `series`.')
+                result.limitations.append('no numeric series was supplied')
+            else:
+                poly_degree = 2
+                output = self._call(result, 'poly_trend',
+                                    {'series': series, 'degree': poly_degree}, True, str(len(series)))
+                if output:
+                    result.answer = (
+                        f'Polynomial trend (degree {output["degree"]}) on {output["points_used"]} points: '
+                        f'coef ' + ', '.join(f'{c:.4g}' for c in output['coef']) +
+                        f'. Residual SD {output["residual_sd"]:.4g}. '
+                        f'Computed by helix.numerics ({output["backend"]} backend).')
+                    result.limitations.extend(output['limitations'])
+                else:
+                    result.answer = 'The polynomial trend tool did not produce a usable result.'
+
+        elif plan.classification == 'correlation':
+            # ``series`` may carry several rows (a list of lists) to correlate.
+            series_rows = series if (isinstance(series, list)
+                                     and series and isinstance(series[0], (list, tuple))) else None
+            if not series_rows:
+                result.answer = ('Correlation needs at least two series. Send them as a list of '
+                                 'number lists under `series` (e.g. [[1, 2, 3], [2, 4, 6]]).')
+                result.limitations.append('correlation needs multiple series')
+            else:
+                output = self._call(result, 'correlation',
+                                    {'X': series_rows}, True, str(len(series_rows)))
+                if output:
+                    result.answer = (
+                        f'Pearson correlation matrix for {output["series"]} series over '
+                        f'{output["points"]} points. Computed by helix.numerics '
+                        f'({output["backend"]} backend).')
+                    result.limitations.append('Correlation does not imply causation.')
+                else:
+                    result.answer = 'The correlation tool did not produce a usable result.'
 
         elif plan.classification == 'search':
             if not self.documents_available:

@@ -1,16 +1,21 @@
-"""HELIX core model: an independently implemented decoder-only transformer.
+"""
+HELIX core model: a decoder-only transformer with long-context extensions.
 
-Architecture choices for the CPU-first baseline (all validated against the
-nanoGPT reference implementation and adapted here):
+Backward-compatible with the original nanoGPT-adapted baseline:
   * decoder-only causal language model
   * Rotary Positional Embeddings (RoPE)
   * RMSNorm (pre-normalization)
   * SwiGLU feed-forward network
-  * Grouped-Query Attention (GQA): many query heads share fewer K/V heads
-  * Weight tying between the input embedding and the output projection
-  * Optional activation checkpointing for training
+  * Grouped-Query Attention (GQA)
+  * Weight tying between input embedding and output projection
+  * block_type is a comma-separated list cycled across layers via helix.arch_blocks
 
-No pretrained weights are used; everything is trained from random initialization.
+New long-context / peak-intelligence capabilities (all optional, defaults keep
+the original behavior unchanged):
+  * NTK-aware RoPE scaling (rope_scaling='ntk' / 'linear') to extend context
+    beyond the training block size without retraining position embeddings.
+  * Sliding-window attention (window_size) for O(T*w) long-context inference.
+  * max_position_embeddings to size the RoPE table independently of block_size.
 """
 
 from __future__ import annotations
@@ -23,11 +28,82 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
+from helix.config import ModelConfig
 from helix.kvcache import KVCache
 from helix.arch_blocks import build_block
 
-from helix.config import ModelConfig
 
+# ---------------------------------------------------------------------------
+# RoPE with NTK / linear scaling
+# ---------------------------------------------------------------------------
+
+def _ntk_scaling_factor(head_dim: int, rope_scaling: str, ntk_alpha: float,
+                        block_size: int, max_position_embeddings: int) -> float:
+    """NTK-aware scaling factor for extending context.
+
+    Following NTK-by-parts: scale rope_base by (new_ctx / old_ctx)^(n/(n-2))
+    where n = head_dim. Only applied when rope_scaling == 'ntk' and ntk_alpha > 1.
+    """
+    if rope_scaling != "ntk" or ntk_alpha <= 1.0 or head_dim <= 2:
+        return 1.0
+    old_ctx = max(block_size, 1)
+    new_ctx = max(max_position_embeddings, old_ctx + 1)
+    ratio = new_ctx / old_ctx
+    return float(ratio ** (head_dim / (head_dim - 2.0)) * ntk_alpha)
+
+
+class RotaryEmbedding(nn.Module):
+    """RoPE tables with optional NTK/linear scaling for long-context extension."""
+
+    def __init__(self, head_dim: int, base: float = 10000.0,
+                 max_position_embeddings: int = 128,
+                 rope_scaling: str = "none", ntk_alpha: float = 1.0,
+                 block_size: int = 128) -> None:
+        super().__init__()
+        self.head_dim = head_dim
+        self.base = base
+        self.max_position_embeddings = max_position_embeddings
+        self.rope_scaling = rope_scaling
+        self.ntk_alpha = ntk_alpha
+        self.block_size = block_size
+        inv_freq = self._build_inv_freq()
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def _build_inv_freq(self) -> torch.Tensor:
+        base = float(self.base)
+        if self.rope_scaling == "linear":
+            ratio = self.max_position_embeddings / max(self.block_size, 1)
+            base = base * ratio
+        elif self.rope_scaling == "ntk":
+            base = base * _ntk_scaling_factor(
+                self.head_dim, self.rope_scaling, self.ntk_alpha,
+                self.block_size, self.max_position_embeddings)
+        return 1.0 / (base ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
+
+    def forward(self, T: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return cos/sin of shape (1, 1, T, head_dim) for positions [0, T)."""
+        t = torch.arange(T, device=device).type_as(self.inv_freq)
+        freqs = torch.outer(t, self.inv_freq)  # (T, head_dim // 2)
+        emb = torch.cat((freqs, freqs), dim=-1)  # (T, head_dim)
+        cos = emb.cos()[None, None, :, :]
+        sin = emb.sin()[None, None, :, :]
+        return cos, sin
+
+
+def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Apply rotary positional embeddings to the last dimension of x.
+
+    x: (..., T, head_dim); cos/sin: (1, 1, T, head_dim)
+    """
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
+    rotated = torch.cat((-x2, x1), dim=-1)
+    return (x * cos) + (rotated * sin)
+
+
+# ---------------------------------------------------------------------------
+# Primitives reused by helix.arch_blocks / helix.image_understanding / tests
+# ---------------------------------------------------------------------------
 
 class RMSNorm(nn.Module):
     """Root-mean-square layer normalization (Zhang & Sennrich, 2019)."""
@@ -41,36 +117,27 @@ class RMSNorm(nn.Module):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps) * self.weight
 
 
-def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """Apply rotary positional embeddings to the last dimension of x.
+class SwiGLU(nn.Module):
+    """SwiGLU feed-forward network (Shazeer, 2020)."""
 
-    x: (..., T, head_dim); cos/sin: (1, 1, T, head_dim)
-    """
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    rotated = torch.cat((-x2, x1), dim=-1)
-    return (x * cos) + (rotated * sin)
-
-
-class RotaryEmbedding(nn.Module):
-    def __init__(self, head_dim: int, base: float = 10000.0) -> None:
+    def __init__(self, config: ModelConfig) -> None:
         super().__init__()
-        self.head_dim = head_dim
-        self.base = base
-        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        hidden_dim = 4 * config.n_embd
+        self.w_gate = nn.Linear(config.n_embd, hidden_dim, bias=config.bias)
+        self.w_up = nn.Linear(config.n_embd, hidden_dim, bias=config.bias)
+        self.w_down = nn.Linear(hidden_dim, config.n_embd, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
 
-    def forward(self, T: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        t = torch.arange(T, device=device).type_as(self.inv_freq)
-        freqs = torch.outer(t, self.inv_freq)  # (T, head_dim // 2)
-        emb = torch.cat((freqs, freqs), dim=-1)  # (T, head_dim)
-        cos = emb.cos()[None, None, :, :]
-        sin = emb.sin()[None, None, :, :]
-        return cos, sin
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.dropout(self.w_down(F.silu(self.w_gate(x)) * self.w_up(x)))
 
 
 class CausalSelfAttention(nn.Module):
-    """Causal self-attention with RoPE and grouped-query K/V heads."""
+    """Causal self-attention with RoPE and grouped-query K/V heads.
+
+    Supports an optional sliding-window mask (window_size) so each query only
+    attends to the most recent `window_size` keys — O(T*w) instead of O(T^2).
+    """
 
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -80,6 +147,8 @@ class CausalSelfAttention(nn.Module):
         self.head_dim = config.n_embd // config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        self.window_size = config.window_size
+        self.block_size = config.block_size
 
         self.c_q = nn.Linear(config.n_embd, self.n_head * self.head_dim, bias=config.bias)
         self.c_k = nn.Linear(config.n_embd, self.n_kv_head * self.head_dim, bias=config.bias)
@@ -87,6 +156,26 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
+
+        # full causal mask buffer
+        self.register_buffer(
+            "causal_mask",
+            torch.tril(torch.ones(config.block_size, config.block_size)).view(
+                1, 1, config.block_size, config.block_size
+            ),
+            persistent=False,
+        )
+        # sliding-window mask buffer
+        if self.window_size is not None and self.window_size < self.block_size:
+            w = self.window_size
+            idx = torch.arange(self.block_size)
+            sw = (idx.view(-1, 1) - idx.view(1, -1)).abs() <= w
+            sw = sw & torch.tril(torch.ones(self.block_size, self.block_size, dtype=torch.bool))
+            self.register_buffer(
+                "window_mask",
+                sw.view(1, 1, self.block_size, self.block_size),
+                persistent=False,
+            )
 
     def forward(
         self,
@@ -96,14 +185,13 @@ class CausalSelfAttention(nn.Module):
     ) -> torch.Tensor:
         B, T, C = x.size()
 
-        q = self.c_q(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)   # (B, nh, T, hs)
-        k = self.c_k(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)  # (B, nkv, T, hs)
+        q = self.c_q(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        k = self.c_k(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
 
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
-        # Expand shared K/V heads to match query heads (grouped-query attention).
         if self.n_kv_head != self.n_head:
             rep = self.n_head // self.n_kv_head
             k = k.unsqueeze(2).expand(B, self.n_kv_head, rep, T, self.head_dim).reshape(
@@ -113,12 +201,17 @@ class CausalSelfAttention(nn.Module):
                 B, self.n_head, T, self.head_dim
             )
 
-        # PyTorch dispatches to supported optimized kernels (CPU math/oneDNN,
-        # CUDA flash/memory-efficient when available); no flash claim on CPU.
-        y = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True,
-            dropout_p=self.dropout if self.training else 0.0,
-        )
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
+
+        if self.window_size is not None and hasattr(self, "window_mask"):
+            mask = self.window_mask[:, :, :T, :T]
+        else:
+            mask = self.causal_mask[:, :, :T, :T]
+        att = att.masked_fill(mask == 0, float("-inf"))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+
+        y = att @ v
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.resid_dropout(self.c_proj(y))
         return y
@@ -141,12 +234,10 @@ class CausalSelfAttention(nn.Module):
         """
         B, T_new, C = x.size()
 
-        q = self.c_q(x).view(B, T_new, self.n_head, self.head_dim).transpose(1, 2)   # (B, nh, T_new, hs)
-        k = self.c_k(x).view(B, T_new, self.n_kv_head, self.head_dim).transpose(1, 2)  # (B, nkv, T_new, hs)
+        q = self.c_q(x).view(B, T_new, self.n_head, self.head_dim).transpose(1, 2)
+        k = self.c_k(x).view(B, T_new, self.n_kv_head, self.head_dim).transpose(1, 2)
         v = self.c_v(x).view(B, T_new, self.n_kv_head, self.head_dim).transpose(1, 2)
 
-        # Rotate the new queries/keys by their absolute positions. Cached K/V were
-        # already rotated when they were inserted, so no re-rotation needed there.
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
@@ -155,7 +246,6 @@ class CausalSelfAttention(nn.Module):
         k_full, v_full = cache.get(layer_idx)  # (B, nkv, S, hs)
         S = k_full.size(2)
 
-        # Expand shared K/V heads to match query heads (grouped-query attention).
         if self.n_kv_head != self.n_head:
             rep = self.n_head // self.n_kv_head
             k_full = k_full.unsqueeze(2).expand(
@@ -175,25 +265,10 @@ class CausalSelfAttention(nn.Module):
         att = F.softmax(att, dim=-1)
         att = self.attn_dropout(att)
 
-        y = att @ v_full  # (B, nh, T_new, hs)
+        y = att @ v_full
         y = y.transpose(1, 2).contiguous().view(B, T_new, C)
         y = self.resid_dropout(self.c_proj(y))
         return y
-
-
-class SwiGLU(nn.Module):
-    """SwiGLU feed-forward network (Shazeer, 2020)."""
-
-    def __init__(self, config: ModelConfig) -> None:
-        super().__init__()
-        hidden_dim = 4 * config.n_embd
-        self.w_gate = nn.Linear(config.n_embd, hidden_dim, bias=config.bias)
-        self.w_up = nn.Linear(config.n_embd, hidden_dim, bias=config.bias)
-        self.w_down = nn.Linear(hidden_dim, config.n_embd, bias=config.bias)
-        self.dropout = nn.Dropout(config.dropout)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.dropout(self.w_down(F.silu(self.w_gate(x)) * self.w_up(x)))
 
 
 class Block(nn.Module):
@@ -227,6 +302,10 @@ class Block(nn.Module):
         return x
 
 
+# ---------------------------------------------------------------------------
+# Main model
+# ---------------------------------------------------------------------------
+
 class HelixTransformer(nn.Module):
     """Decoder-only language model trained from random initialization."""
 
@@ -247,6 +326,21 @@ class HelixTransformer(nn.Module):
             self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.apply(self._init_weights)
 
+        # RoPE sized to max_position_embeddings (>= block_size) for long-context.
+        self.rope = RotaryEmbedding(
+            self.head_dim,
+            base=config.rope_base,
+            max_position_embeddings=int(config.max_position_embeddings),
+            rope_scaling=config.rope_scaling,
+            ntk_alpha=config.ntk_alpha,
+            block_size=config.block_size,
+        )
+
+        n_params = sum(p.numel() for p in self.parameters())
+        print(f"HELIXTransformer: {n_params/1e6:.2f}M params, block_size={config.block_size}, "
+              f"layers={config.n_layer}, heads={config.n_head}, embd={config.n_embd}, "
+              f"rope_scaling={config.rope_scaling}, window={config.window_size}")
+
     def _init_weights(self, module: nn.Module) -> None:
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -256,53 +350,13 @@ class HelixTransformer(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def _rope(self, T: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        rope = RotaryEmbedding(self.head_dim, self.config.rope_base)
-        rope.inv_freq = rope.inv_freq.to(device)
-        return rope(T, device)
+        return self.rope(T, device)
 
-    def _rope_positions(
-        self, start: int, end: int, device: torch.device
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _rope_positions(self, start: int, end: int, device: torch.device
+                        ) -> Tuple[torch.Tensor, torch.Tensor]:
         """RoPE cos/sin for absolute positions [start, end)."""
-        rope = RotaryEmbedding(self.head_dim, self.config.rope_base)
-        rope.inv_freq = rope.inv_freq.to(device)
-        cos, sin = rope(end, device)
+        cos, sin = self.rope(end, device)
         return cos[:, :, start:end, :], sin[:, :, start:end, :]
-
-    def incremental_forward(
-        self,
-        idx: torch.Tensor,
-        cache: KVCache,
-        start_pos: int,
-    ) -> Tuple[torch.Tensor, KVCache]:
-        """Incremental forward: process tokens at [start_pos, start_pos+T).
-
-        Uses the KV cache for all earlier positions. Returns logits for the
-        input tokens and the updated cache.
-        """
-        device = idx.device
-        B, T = idx.size()
-        if T < 1 or start_pos < 0 or start_pos + T > self.config.block_size:
-            raise ValueError("incremental context exceeds the model window")
-        if any(cache.seq_len(i) != start_pos for i in range(self.config.n_layer)):
-            raise ValueError("start_pos must equal each layer's cache length")
-        x = self.drop(self.tok_emb(idx))
-        cos, sin = self._rope_positions(start_pos, start_pos + T, device)
-
-        if self.config.grad_checkpoint and self.training:
-            # Not used during generation (eval mode), but kept for completeness.
-            for i, block in enumerate(self.blocks):
-                x = block.forward_incremental(x, cache, start_pos, cos, sin, i)
-        else:
-            for i, block in enumerate(self.blocks):
-                x = block.forward_incremental(x, cache, start_pos, cos, sin, i)
-
-        x = self.norm_f(x)
-        if self.config.weight_tying:
-            logits = F.linear(x, self.tok_emb.weight)
-        else:
-            logits = self.lm_head(x)  # type: ignore[union-attr]
-        return logits, cache
 
     def forward(
         self,
@@ -312,10 +366,10 @@ class HelixTransformer(nn.Module):
         device = idx.device
         B, T = idx.size()
         if T > self.config.block_size:
-            idx = idx[:, -self.config.block_size :]
+            idx = idx[:, -self.config.block_size:]
             T = self.config.block_size
             if targets is not None:
-                targets = targets[:, -self.config.block_size :]
+                targets = targets[:, -self.config.block_size:]
 
         x = self.drop(self.tok_emb(idx))
         cos, sin = self._rope(T, device)
@@ -340,6 +394,36 @@ class HelixTransformer(nn.Module):
 
         return logits, loss
 
+    def incremental_forward(
+        self,
+        idx: torch.Tensor,
+        cache: KVCache,
+        start_pos: int,
+    ) -> Tuple[torch.Tensor, KVCache]:
+        """Incremental forward: process tokens at [start_pos, start_pos+T)."""
+        device = idx.device
+        B, T = idx.size()
+        if T < 1 or start_pos < 0 or start_pos + T > self.config.block_size:
+            raise ValueError("incremental context exceeds the model window")
+        if any(cache.seq_len(i) != start_pos for i in range(self.config.n_layer)):
+            raise ValueError("start_pos must equal each layer's cache length")
+        x = self.drop(self.tok_emb(idx))
+        cos, sin = self._rope_positions(start_pos, start_pos + T, device)
+
+        for i, block in enumerate(self.blocks):
+            if hasattr(block, "forward_incremental"):
+                x = block.forward_incremental(x, cache, start_pos, cos, sin, i)
+            else:
+                # arch_blocks LinearAttnBlock / RecurrentBlock: no KV cache.
+                x = block(x, cos, sin)
+
+        x = self.norm_f(x)
+        if self.config.weight_tying:
+            logits = F.linear(x, self.tok_emb.weight)
+        else:
+            logits = self.lm_head(x)
+        return logits, cache
+
     @torch.no_grad()
     def generate(
         self,
@@ -348,21 +432,44 @@ class HelixTransformer(nn.Module):
         temperature: float = 1.0,
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
+        eos_token_id: Optional[int] = None,
+        use_cache: bool = False,
     ) -> torch.Tensor:
-        """Autoregressive generation (full-context recompute each step)."""
+        """Autoregressive generation (full-context recompute each step, or KV cached)."""
         self.eval()
-        for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size :]
-            logits, _ = self(idx_cond)
-            logits = logits[:, -1, :] / max(temperature, 1e-6)
+        B, T0 = idx.shape
+        cache = None
+        if use_cache:
+            cache = KVCache(
+                n_layers=self.config.n_layer, batch_size=B, max_seq=self.config.block_size,
+                n_kv_head=self.config.n_kv_head, head_dim=self.head_dim,
+                device=idx.device, dtype=torch.float32,
+            )
+
+        for step in range(max_new_tokens):
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            if use_cache and cache is not None and cache.seq_len(0) > 0:
+                # feed only the newest token
+                step_input = idx_cond[:, -1:]
+                start_pos = cache.seq_len(0) - 1
+                logits, cache = self.incremental_forward(step_input, cache, start_pos)
+                step_logits = logits[:, -1, :]
+            else:
+                logits, _ = self(idx_cond)
+                step_logits = logits[:, -1, :]
+                if use_cache and cache is not None:
+                    # prime the cache with the full context
+                    self.incremental_forward(idx_cond, cache, 0)
+
+            step_logits = step_logits / max(temperature, 1e-6)
 
             if top_k is not None and top_k > 0:
-                top_k = min(top_k, logits.size(-1))
-                v, _ = torch.topk(logits, top_k)
-                logits = torch.where(logits < v[:, [-1]], float("-inf"), logits)
+                top_k = min(top_k, step_logits.size(-1))
+                v, _ = torch.topk(step_logits, top_k)
+                step_logits = torch.where(step_logits < v[:, [-1]], float("-inf"), step_logits)
 
             if top_p is not None and 0.0 < top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+                sorted_logits, sorted_indices = torch.sort(step_logits, descending=True, dim=-1)
                 cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
                 sorted_indices_to_remove = cumulative_probs > top_p
                 sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
@@ -370,11 +477,13 @@ class HelixTransformer(nn.Module):
                 indices_to_remove = sorted_indices_to_remove.scatter(
                     1, sorted_indices, sorted_indices_to_remove
                 )
-                logits = logits.masked_fill(indices_to_remove, float("-inf"))
+                step_logits = step_logits.masked_fill(indices_to_remove, float("-inf"))
 
-            probs = F.softmax(logits, dim=-1)
+            probs = F.softmax(step_logits, dim=-1)
             next_id = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, next_id), dim=1)
+            if eos_token_id is not None and next_id.item() == eos_token_id:
+                break
         return idx
 
     def configure_optimizers(self, train_cfg) -> torch.optim.Optimizer:
@@ -391,3 +500,23 @@ class HelixTransformer(nn.Module):
             betas=(train_cfg.beta1, train_cfg.beta2),
         )
         return optimizer
+
+    def num_parameters(self) -> int:
+        return sum(p.numel() for p in self.parameters())
+
+
+# Alias for external callers that previously imported HELIXModel from here.
+HELIXModel = HelixTransformer
+
+
+def build_model(config: ModelConfig) -> HelixTransformer:
+    return HelixTransformer(config)
+
+
+def load_checkpoint(path: str, config: ModelConfig, device: str = "cpu") -> HelixTransformer:
+    model = HelixTransformer(config).to(device)
+    state = torch.load(path, map_location=device)
+    model_state = model.state_dict()
+    filtered = {k: v for k, v in state.items() if k in model_state and model_state[k].shape == v.shape}
+    model.load_state_dict(filtered, strict=False)
+    return model

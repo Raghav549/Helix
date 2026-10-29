@@ -15,6 +15,10 @@ FIXTURES = Path(__file__).parent / 'fixtures' / 'retrieval'
     ('Differentiate x**3 + 2*x', 'math'),
     ('what is the derivative of sin(x)?', 'math'),
     ('Forecast this trend for next quarter', 'forecast'),
+    ('autoregress this series from its own past', 'ar_forecast'),
+    ('predict y from multiple feature columns', 'multiple_regression'),
+    ('fit a polynomial trend to the data', 'poly_trend'),
+    ('correlation between these two series', 'correlation'),
     ('find the source about attention masking', 'search'),
     ('run this python script and show the traceback', 'code'),
     ('Write me a short poem about the sea', 'conversation'),
@@ -74,6 +78,86 @@ def test_forecast_without_a_series_does_not_invent_numbers():
     result = orchestrator.run('predict next year', request_id='req-3')
     assert 'needs at least three numeric points' in result.answer
     assert calls == []
+    assert result.tool_calls == []
+
+
+def _ar_tool(arguments):
+    from helix.numerics import ar_predict
+    return ar_predict(arguments['series'], int(arguments.get('p', 2)), int(arguments.get('steps', 2)))
+
+
+def _mlr_tool(arguments):
+    from helix.numerics import mlr_fit
+    return mlr_fit(arguments.get('X', []), arguments.get('y', []))
+
+
+def _poly_tool(arguments):
+    from helix.numerics import poly_fit
+    return poly_fit(arguments.get('series', []), int(arguments.get('degree', 2)))
+
+
+def _corr_tool(arguments):
+    from helix.numerics import correlation
+    return correlation(arguments.get('X', []))
+
+
+def test_ar_forecast_uses_series_own_past():
+    # A non-collinear series so AR(2) is not singular.
+    rng_series = [float((i * i + i) % 7) for i in range(12)]
+    orchestrator = Orchestrator({'ar_forecast': _ar_tool})
+    result = orchestrator.run('autoregress this series from its own past', request_id='req-13',
+                              series=rng_series, horizon=2)
+    assert result.classification == 'ar_forecast'
+    assert result.complied == ['ar_forecast']
+    assert 'autoregressive forecast' in result.answer
+    assert result.tool_calls[0].ok is True
+    assert result.tool_calls[0].permission == 'read-only'
+
+
+def test_ar_forecast_without_series_is_honest():
+    orchestrator = Orchestrator({'ar_forecast': _ar_tool})
+    result = orchestrator.run('autoregress this series', request_id='req-14')
+    assert 'needs at least four numeric points' in result.answer
+    assert result.tool_calls == []
+
+
+def test_multiple_regression_classifies_and_requires_feature_data():
+    orchestrator = Orchestrator({'multiple_regression': _mlr_tool})
+    result = orchestrator.run('predict y from multiple feature columns', request_id='req-15')
+    assert result.classification == 'multiple_regression'
+    # The orchestrator `run()` path only carries `series`, not a feature matrix X,
+    # so the tool honestly reports no usable result rather than inventing data.
+    assert 'did not produce a usable result' in result.answer
+    assert result.tool_calls and result.tool_calls[0].ok is False
+
+
+def test_poly_trend_reports_coefficients():
+    orchestrator = Orchestrator({'poly_trend': _poly_tool})
+    result = orchestrator.run('fit a polynomial trend to the data', request_id='req-16',
+                              series=[float(i * i) for i in range(1, 11)])
+    assert result.classification == 'poly_trend'
+    assert result.complied == ['poly_trend']
+    assert 'degree 2' in result.answer
+    assert result.tool_calls[0].ok is True
+
+
+def test_correlation_reports_matrix():
+    X = [[1.0, 2.0, 3.0, 4.0], [2.0, 4.0, 6.0, 8.0]]
+    orchestrator = Orchestrator({'correlation': _corr_tool})
+    result = orchestrator.run('correlation between these two series', request_id='req-17',
+                              series=X)
+    assert result.classification == 'correlation'
+    assert result.complied == ['correlation']
+    assert 'Pearson correlation matrix' in result.answer
+    assert any('Correlation does not imply causation' in item for item in result.limitations)
+
+
+def test_correlation_flat_series_reports_limitation():
+    orchestrator = Orchestrator({'correlation': _corr_tool})
+    result = orchestrator.run('correlation between these two series', request_id='req-18',
+                              series=[1.0, 2.0, 3.0])
+    assert result.classification == 'correlation'
+    assert 'needs at least two series' in result.answer
     assert result.tool_calls == []
 
 

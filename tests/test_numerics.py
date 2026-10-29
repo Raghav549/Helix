@@ -5,8 +5,9 @@ import random
 import pytest
 
 from helix import numerics
-from helix.numerics import (BACKEND, NumericInputError, ewma, linear_forecast, mae,
-                            ols_fit, ols_predict, rmse)
+from helix.numerics import (BACKEND, NumericInputError, ar_fit, ar_predict, correlation,
+                            ewma, linear_forecast, mae, mlr_fit, mlr_predict, ols_fit,
+                            ols_predict, poly_fit, poly_predict, rmse)
 
 
 def test_backend_is_reported_honestly():
@@ -107,3 +108,94 @@ def test_invalid_numeric_inputs_are_rejected():
         rmse([], [])
     with pytest.raises(NumericInputError):
         ols_fit([1.0], [1.0])
+
+
+def test_ar_fit_recovers_true_coefficients():
+    rng = random.Random(0)
+    series = [0.0, 0.1]
+    for t in range(2, 150):
+        series.append(0.5 + 0.6 * series[t - 1] - 0.3 * series[t - 2] + rng.gauss(0, 0.05))
+    fit = ar_fit(series, 2)
+    assert fit['p'] == 2
+    assert fit['points_used'] == len(series)
+    assert fit['phi'][0] == pytest.approx(0.6, abs=0.25)
+    assert fit['phi'][1] == pytest.approx(-0.3, abs=0.25)
+    assert fit['intercept'] == pytest.approx(0.5, abs=0.1)
+    assert fit['residual_sd'] > 0
+    assert fit['backend'] == BACKEND
+    assert 'not evidence' in fit['limitations']
+
+
+def test_ar_predict_forecasts_finite_values():
+    series = [float(i) + (i % 3) for i in range(20)]
+    out = ar_predict(series, 2, 4)
+    assert out['steps'] == 4
+    assert len(out['forecasts']) == 4
+    assert out['last_observed'] == series[-1]
+    assert all(math.isfinite(v) for v in out['forecasts'])
+    assert out['backend'] == BACKEND
+
+
+def test_ar_invalid_p_rejected():
+    with pytest.raises(NumericInputError):
+        ar_fit([1.0, 2.0, 3.0, 4.0, 5.0], 0)
+    with pytest.raises(NumericInputError):
+        ar_fit([1.0, 2.0, 3.0, 4.0, 5.0], 13)
+    with pytest.raises(NumericInputError):
+        ar_predict([1.0, 2.0, 3.0, 4.0], 2, 0)
+
+
+def test_mlr_fit_and_predict():
+    X = [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0], [1.0, 2.0]]
+    y = [1.0, 1.0, 2.0, 3.0, 3.0]  # y = x1 + x2 roughly
+    fit = mlr_fit(X, y)
+    assert fit['features'] == 2
+    assert fit['points_used'] == 5
+    assert fit['r2'] > 0.9
+    pred = mlr_predict([2.0, 2.0], fit)
+    assert pred['yhat'] == pytest.approx(4.0, abs=0.5)
+    assert fit['backend'] == BACKEND
+
+
+def test_mlr_rejects_bad_shapes():
+    with pytest.raises(NumericInputError):
+        mlr_fit([[1.0], [2.0]], [1.0, 2.0, 3.0])
+    with pytest.raises(NumericInputError):
+        mlr_fit([[1.0, 2.0], [3.0]], [1.0, 2.0])
+    with pytest.raises(NumericInputError):
+        mlr_predict([1.0], {'features': 2, 'intercept': 0.0, 'beta': [1.0, 2.0]})
+
+
+def test_poly_fit_and_predict():
+    series = [float(i * i) for i in range(1, 11)]  # quadratic
+    fit = poly_fit(series, 2)
+    assert fit['degree'] == 2
+    assert fit['points_used'] == 10
+    # A clean quadratic should be recovered nearly exactly by degree 2.
+    pred = poly_predict(2, fit['coef'], 11.0)
+    assert pred['yhat'] == pytest.approx(11.0 * 11.0, abs=1e-4)
+    assert fit['backend'] == BACKEND
+
+
+def test_poly_rejects_high_degree_for_short_series():
+    with pytest.raises(NumericInputError):
+        poly_fit([1.0, 2.0, 3.0], 2)  # needs degree + 3 = 5 points
+    with pytest.raises(NumericInputError):
+        poly_fit([1.0, 2.0, 3.0, 4.0, 5.0], 13)
+
+
+def test_correlation_matrix():
+    X = [[1.0, 2.0, 3.0, 4.0], [2.0, 4.0, 6.0, 8.0], [1.0, 1.0, 2.0, 3.0]]
+    c = correlation(X)
+    assert c['series'] == 3
+    assert c['points'] == 4
+    assert c['corr'][0][1] == pytest.approx(1.0, abs=1e-9)  # perfectly correlated
+    assert all(abs(c['corr'][i][i] - 1.0) < 1e-9 for i in range(3))
+    assert c['backend'] == BACKEND
+
+
+def test_correlation_rejects_bad_input():
+    with pytest.raises(NumericInputError):
+        correlation([[1.0, 2.0], [3.0]])
+    with pytest.raises(NumericInputError):
+        correlation([[1.0, 2.0]])
