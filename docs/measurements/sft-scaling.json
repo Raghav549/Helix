@@ -1,0 +1,148 @@
+{
+  "description": "Instruction-tuning scaling check. Same base checkpoint, same 516 pairs (465 train / 51 held-out), same seed; only the number of SFT steps changes. Every evaluation uses 50 sampled held-out batches so the numbers are comparable.",
+  "base_checkpoint": "llm/ckpt-final.pt",
+  "pairs_sha256": "14fc8038b6dd0e7f22d8beafedf1d1cbf3ebbefa7742e61665738bf752142aca",
+  "runs": [
+    {
+      "sft_steps": 60,
+      "train_loss": 3.3516,
+      "sft_heldout_loss": 3.5044,
+      "tokens_processed": 25751,
+      "elapsed_s": 6.9,
+      "early_stopped": false,
+      "validation": {
+        "loss": 4.977,
+        "perplexity": 145.04,
+        "batches": 50
+      },
+      "tasks_passed": 1,
+      "tasks_total": 5,
+      "tasks": [
+        {
+          "task": "arithmetic_addition",
+          "value": 0.0,
+          "threshold": 0.5,
+          "passed": false
+        },
+        {
+          "task": "code_completion_is_even",
+          "value": 0.0,
+          "threshold": 1.0,
+          "passed": false
+        },
+        {
+          "task": "sentence_completion_capital",
+          "value": 0.0,
+          "threshold": 1.0,
+          "passed": false
+        },
+        {
+          "task": "long_context_recall",
+          "value": 0.0,
+          "threshold": 1.0,
+          "passed": false
+        },
+        {
+          "task": "calibration_true_vs_false",
+          "value": 1.0,
+          "threshold": 1.0,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "sft_steps": 300,
+      "train_loss": 2.9,
+      "sft_heldout_loss": 3.1111,
+      "tokens_processed": 87397,
+      "elapsed_s": 25.82,
+      "early_stopped": false,
+      "validation": {
+        "loss": 5.1717,
+        "perplexity": 176.22,
+        "batches": 50
+      },
+      "tasks_passed": 1,
+      "tasks_total": 5,
+      "tasks": [
+        {
+          "task": "arithmetic_addition",
+          "value": 0.0,
+          "threshold": 0.5,
+          "passed": false
+        },
+        {
+          "task": "code_completion_is_even",
+          "value": 0.0,
+          "threshold": 1.0,
+          "passed": false
+        },
+        {
+          "task": "sentence_completion_capital",
+          "value": 0.0,
+          "threshold": 1.0,
+          "passed": false
+        },
+        {
+          "task": "long_context_recall",
+          "value": 0.0,
+          "threshold": 1.0,
+          "passed": false
+        },
+        {
+          "task": "calibration_true_vs_false",
+          "value": 1.0,
+          "threshold": 1.0,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "sft_steps": 1000,
+      "train_loss": 2.2669,
+      "sft_heldout_loss": 2.5241,
+      "tokens_processed": 291921,
+      "elapsed_s": 80.89,
+      "early_stopped": false,
+      "validation": {
+        "loss": 5.8571,
+        "perplexity": 349.71,
+        "batches": 50
+      },
+      "tasks_passed": 1,
+      "tasks_total": 5,
+      "tasks": [
+        {
+          "task": "arithmetic_addition",
+          "value": 0.0,
+          "threshold": 0.5,
+          "passed": false
+        },
+        {
+          "task": "code_completion_is_even",
+          "value": 0.0,
+          "threshold": 1.0,
+          "passed": false
+        },
+        {
+          "task": "sentence_completion_capital",
+          "value": 0.0,
+          "threshold": 1.0,
+          "passed": false
+        },
+        {
+          "task": "long_context_recall",
+          "value": 0.0,
+          "threshold": 1.0,
+          "passed": false
+        },
+        {
+          "task": "calibration_true_vs_false",
+          "value": 1.0,
+          "threshold": 1.0,
+          "passed": true
+        }
+      ]
+    }
+  ]
+}

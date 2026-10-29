@@ -5,13 +5,13 @@
     "measurements"
   ],
   "documents": 11,
-  "chunks": 80,
-  "index_checksum": "0c5e473cec5efcfd3e5585d3c2b1942c3e0553b9f1b5c5a91639ec0ac9aacc22",
+  "chunks": 82,
+  "index_checksum": "e58f23d78581444f5a1bd51f938fcfbd80f3da1d7cc596e39dbc4fb9a283e009",
   "k": 4,
   "total": 12,
   "recall_at_1": 0.75,
-  "recall_at_4": 0.8333,
-  "mrr": 0.7708,
+  "recall_at_4": 0.75,
+  "mrr": 0.75,
   "invalid_citations": 0,
   "caveat": "Small hand-labelled set over the project documentation with a lexical retriever; scores are indicative, not a general retrieval benchmark, and questions were written after the documents were, so they share vocabulary.",
   "results": [
@@ -31,18 +31,18 @@
         },
         {
           "source": "RESEARCH_LEDGER.md",
-          "score": 0.6311,
+          "score": 0.6389,
           "citation": "RESEARCH_LEDGER.md#chars=2292-2946"
         },
         {
           "source": "REPRODUCIBILITY.md",
-          "score": 0.611,
+          "score": 0.6099,
           "citation": "REPRODUCIBILITY.md#chars=3952-4758"
         },
         {
           "source": "MEASUREMENTS.md",
-          "score": 0.5836,
-          "citation": "MEASUREMENTS.md#chars=8615-9102"
+          "score": 0.5792,
+          "citation": "MEASUREMENTS.md#chars=9631-10118"
         }
       ]
     },
@@ -56,7 +56,7 @@
         {
           "source": "STATUS.md",
           "score": 0.7043,
-          "citation": "STATUS.md#chars=3886-4751"
+          "citation": "STATUS.md#chars=4076-4941"
         },
         {
           "source": "STATUS.md",
@@ -65,12 +65,12 @@
         },
         {
           "source": "STATUS.md",
-          "score": 0.5228,
-          "citation": "STATUS.md#chars=4631-5462"
+          "score": 0.5227,
+          "citation": "STATUS.md#chars=4821-5652"
         },
         {
           "source": "STATUS.md",
-          "score": 0.3796,
+          "score": 0.3795,
           "citation": "STATUS.md#chars=2157-2911"
         }
       ]
@@ -89,18 +89,18 @@
         },
         {
           "source": "STATUS.md",
-          "score": 0.6073,
-          "citation": "STATUS.md#chars=3886-4751"
+          "score": 0.6065,
+          "citation": "STATUS.md#chars=4076-4941"
         },
         {
           "source": "STATUS.md",
-          "score": 0.5557,
+          "score": 0.5549,
           "citation": "STATUS.md#chars=0-812"
         },
         {
           "source": "STATUS.md",
-          "score": 0.4277,
-          "citation": "STATUS.md#chars=4631-5462"
+          "score": 0.427,
+          "citation": "STATUS.md#chars=4821-5652"
         }
       ]
     },
@@ -114,21 +114,21 @@
         {
           "source": "STATUS.md",
           "score": 0.6632,
-          "citation": "STATUS.md#chars=4631-5462"
+          "citation": "STATUS.md#chars=4821-5652"
         },
         {
           "source": "PROVENANCE.md",
-          "score": 0.5361,
+          "score": 0.535,
           "citation": "PROVENANCE.md#chars=713-1237"
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.4815,
+          "score": 0.4809,
           "citation": "ARCHITECTURE.md#chars=0-589"
         },
         {
           "source": "RESEARCH_LEDGER.md",
-          "score": 0.4735,
+          "score": 0.4739,
           "citation": "RESEARCH_LEDGER.md#chars=2292-2946"
         }
       ]
@@ -147,18 +147,18 @@
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.3969,
+          "score": 0.4097,
           "citation": "ARCHITECTURE.md#chars=0-589"
         },
         {
-          "source": "SFT_DATA.md",
-          "score": 0.3086,
-          "citation": "SFT_DATA.md#chars=636-1497"
+          "source": "MEASUREMENTS.md",
+          "score": 0.3128,
+          "citation": "MEASUREMENTS.md#chars=9631-10118"
         },
         {
-          "source": "MEASUREMENTS.md",
-          "score": 0.3038,
-          "citation": "MEASUREMENTS.md#chars=8615-9102"
+          "source": "SFT_DATA.md",
+          "score": 0.3009,
+          "citation": "SFT_DATA.md#chars=636-1497"
         }
       ]
     },
@@ -176,17 +176,17 @@
         },
         {
           "source": "RESEARCH_LEDGER.md",
-          "score": 0.6858,
+          "score": 0.684,
           "citation": "RESEARCH_LEDGER.md#chars=1940-2412"
         },
         {
           "source": "PROVENANCE.md",
-          "score": 0.534,
+          "score": 0.5324,
           "citation": "PROVENANCE.md#chars=1810-2671"
         },
         {
           "source": "PROVENANCE.md",
-          "score": 0.5251,
+          "score": 0.5238,
           "citation": "PROVENANCE.md#chars=2551-3418"
         }
       ]
@@ -205,17 +205,17 @@
         },
         {
           "source": "DATA_PIPELINE.md",
-          "score": 0.5912,
+          "score": 0.5915,
           "citation": "DATA_PIPELINE.md#chars=1379-2213"
         },
         {
           "source": "SOURCE_PIPELINE.md",
-          "score": 0.5341,
+          "score": 0.5345,
           "citation": "SOURCE_PIPELINE.md#chars=1757-2587"
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.5251,
+          "score": 0.5263,
           "citation": "ARCHITECTURE.md#chars=4030-4667"
         }
       ]
@@ -230,22 +230,22 @@
         {
           "source": "MEASUREMENTS.md",
           "score": 0.72,
-          "citation": "MEASUREMENTS.md#chars=4861-5730"
+          "citation": "MEASUREMENTS.md#chars=5877-6746"
         },
         {
           "source": "RESEARCH_LEDGER.md",
-          "score": 0.5221,
+          "score": 0.5186,
           "citation": "RESEARCH_LEDGER.md#chars=0-862"
         },
         {
           "source": "MODEL_CARD.md",
-          "score": 0.4225,
+          "score": 0.4264,
           "citation": "MODEL_CARD.md#chars=2557-3373"
         },
         {
           "source": "MEASUREMENTS.md",
-          "score": 0.4131,
-          "citation": "MEASUREMENTS.md#chars=5610-6297"
+          "score": 0.4105,
+          "citation": "MEASUREMENTS.md#chars=6626-7313"
         }
       ]
     },
@@ -254,7 +254,7 @@
       "expected": [
         "SFT_DATA.md"
       ],
-      "rank": 4,
+      "rank": null,
       "top": [
         {
           "source": "MEASUREMENTS.md",
@@ -263,18 +263,18 @@
         },
         {
           "source": "RESEARCH_LEDGER.md",
-          "score": 0.6765,
+          "score": 0.6575,
           "citation": "RESEARCH_LEDGER.md#chars=742-1451"
         },
         {
-          "source": "DATA_PIPELINE.md",
-          "score": 0.5932,
-          "citation": "DATA_PIPELINE.md#chars=762-1499"
+          "source": "MEASUREMENTS.md",
+          "score": 0.5881,
+          "citation": "MEASUREMENTS.md#chars=2681-3365"
         },
         {
-          "source": "SFT_DATA.md",
-          "score": 0.579,
-          "citation": "SFT_DATA.md#chars=0-756"
+          "source": "DATA_PIPELINE.md",
+          "score": 0.5869,
+          "citation": "DATA_PIPELINE.md#chars=762-1499"
         }
       ]
     },
@@ -292,17 +292,17 @@
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.6627,
+          "score": 0.661,
           "citation": "ARCHITECTURE.md#chars=1896-2787"
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.6228,
+          "score": 0.6208,
           "citation": "ARCHITECTURE.md#chars=0-589"
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.5457,
+          "score": 0.545,
           "citation": "ARCHITECTURE.md#chars=2667-3415"
         }
       ]
@@ -316,7 +316,7 @@
       "top": [
         {
           "source": "DATA_PIPELINE.md",
-          "score": 0.7303,
+          "score": 0.734,
           "citation": "DATA_PIPELINE.md#chars=0-882"
         },
         {
@@ -326,12 +326,12 @@
         },
         {
           "source": "REPRODUCIBILITY.md",
-          "score": 0.403,
+          "score": 0.4058,
           "citation": "REPRODUCIBILITY.md#chars=4638-5253"
         },
         {
           "source": "PROVENANCE.md",
-          "score": 0.3679,
+          "score": 0.3707,
           "citation": "PROVENANCE.md#chars=1117-1930"
         }
       ]
@@ -346,21 +346,21 @@
         {
           "source": "MEASUREMENTS.md",
           "score": 0.721,
-          "citation": "MEASUREMENTS.md#chars=4861-5730"
+          "citation": "MEASUREMENTS.md#chars=5877-6746"
         },
         {
           "source": "MEASUREMENTS.md",
-          "score": 0.6619,
-          "citation": "MEASUREMENTS.md#chars=5610-6297"
+          "score": 0.6614,
+          "citation": "MEASUREMENTS.md#chars=6626-7313"
         },
         {
           "source": "ARCHITECTURE.md",
-          "score": 0.6269,
+          "score": 0.6274,
           "citation": "ARCHITECTURE.md#chars=4030-4667"
         },
         {
           "source": "REPRODUCIBILITY.md",
-          "score": 0.4606,
+          "score": 0.4621,
           "citation": "REPRODUCIBILITY.md#chars=0-734"
         }
       ]

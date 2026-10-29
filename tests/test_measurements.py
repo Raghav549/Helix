@@ -107,3 +107,21 @@ def test_retrieval_report_matches_a_fresh_measurement():
                 'invalid_citations', 'total'):
         assert committed[key] == fresh[key], f'retrieval report is stale for {key}'
     assert committed['invalid_citations'] == 0
+
+
+def test_instruction_tuning_scaling_shows_overfitting_not_gains():
+    """More SFT helps instruction loss and hurts general validation loss.
+
+    The documented decision (keep the 60-step checkpoint) depends on this trend, so
+    a silent edit to either column fails the suite.
+    """
+    report = _load('sft-scaling.json')
+    runs = sorted(report['runs'], key=lambda run: run['sft_steps'])
+    assert [run['sft_steps'] for run in runs] == [60, 300, 1000]
+    instruction_losses = [run['sft_heldout_loss'] for run in runs]
+    validation_losses = [run['validation']['loss'] for run in runs]
+    assert instruction_losses == sorted(instruction_losses, reverse=True), 'SFT held-out loss should fall with more steps'
+    assert validation_losses == sorted(validation_losses), 'validation loss should rise with more steps'
+    assert all(run['tasks_passed'] <= 1 for run in runs)
+    assert len({run['validation']['batches'] for run in runs}) == 1, 'evaluations must use identical batch counts'
+    assert len(report['pairs_sha256']) == 64

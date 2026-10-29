@@ -177,6 +177,7 @@ Reported from this checkout, not from memory:
 | Evaluation | validation loss 4.9701, perplexity 144.04, **1/5 probes passed** (calibration only) |
 | Throughput | forward+backward 15,271 tok/s @ block 128; generation 566 tok/s (1.77 ms/token) |
 | KV cache / int8 | 1.17× faster with identical output / 0.98× (no win) |
+| Longer instruction tuning | 1000 steps cut SFT held-out loss 3.50 → 2.52 but raised validation loss 4.98 → 5.86 with no probe gains, so the shorter checkpoint ships |
 
 Method: held-out token windows for loss/perplexity, five fixed probes for capability,
 and a benchmark script for throughput and memory. The full table, including what these

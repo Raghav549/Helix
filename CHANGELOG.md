@@ -48,6 +48,11 @@ observed; deployment status is tracked in [docs/STATUS.md](docs/STATUS.md).
 - Training robustness: abort (or explicitly skip) on non-finite loss or gradient norm,
   gradient clipping and accumulation, atomic checkpoints, resume, and metrics that
   record provenance (git commit, dataset/tokenizer hashes) and environment.
+- Instruction-tuning scaling measured as a negative result: 1000 steps lower the SFT
+  held-out loss (3.50 → 2.52) while general validation loss rises (4.98 → 5.86) and no
+  probe improves, so the 60-step checkpoint remains the default.
+- Retrieval quality measured on a labelled set (recall@1 0.75, recall@4 0.83, MRR 0.77,
+  zero invalid citations) with the lexical retriever stated honestly.
 
 ### Documentation
 
