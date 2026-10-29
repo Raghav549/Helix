@@ -1261,7 +1261,7 @@ async function submitKnowledge(event) {
     result.textContent = 'Provide exactly one source: a URL, pasted text, or one file.';
     return;
   }
-  if (file && file.size > 4 * 1024 * 1024) {
+  if (file && file.size > Math.floor(3.75 * 1024 * 1024)) {
     result.textContent = 'This file exceeds the 4 MiB upload limit.';
     return;
   }
