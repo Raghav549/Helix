@@ -324,7 +324,6 @@ export function ChatScreen() {
         ? SecureStore.setItemAsync(CREDENTIALS_KEY, JSON.stringify(value.auth))
         : SecureStore.deleteItemAsync(CREDENTIALS_KEY);
       write.catch(() => undefined);
-      setHealthChecked(false);
     },
     [],
   );
