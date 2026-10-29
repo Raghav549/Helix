@@ -1,0 +1,118 @@
+{
+  "stage": "pretraining",
+  "initialization": "random",
+  "config": {
+    "model": {
+      "vocab_size": 512,
+      "block_size": 128,
+      "n_layer": 3,
+      "n_head": 4,
+      "n_embd": 128,
+      "n_kv_head": 2,
+      "dropout": 0.1,
+      "bias": false,
+      "eps": 1e-05,
+      "rope_base": 10000.0,
+      "weight_tying": true,
+      "grad_checkpoint": false,
+      "block_type": "transformer"
+    },
+    "train": {
+      "batch_size": 8,
+      "block_size": 128,
+      "max_iters": 200,
+      "eval_interval": 50,
+      "eval_iters": 10,
+      "learning_rate": 0.0006,
+      "weight_decay": 0.05,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "grad_clip": 1.0,
+      "gradient_accumulation_steps": 1,
+      "lr_decay_iters": 200,
+      "min_lr": 6e-05,
+      "warmup_iters": 20,
+      "seed": 1337,
+      "device": "cpu",
+      "dtype": "float32",
+      "log_interval": 50,
+      "save_interval": 0,
+      "out_dir": "<run-root>/llm",
+      "resume_from": null
+    },
+    "data": {
+      "train_file": "<run-root>/data/train.npy",
+      "val_file": "<run-root>/data/val.npy",
+      "vocab_file": "<run-root>/data/vocab.json",
+      "merges_file": "<run-root>/data/merges.json",
+      "corpus_file": "<run-root>/corpus.txt",
+      "train_frac": 0.9
+    }
+  },
+  "parameters": 803712,
+  "iterations": 200,
+  "train_tokens_processed": 204800,
+  "best_validation_loss": 4.78095,
+  "elapsed_s": 12.5336,
+  "tokens_per_second": 16340.07,
+  "skipped_steps": 0,
+  "nonfinite_events": 0,
+  "last_grad_norm": 0.959146,
+  "peak_rss_mb": 697.9,
+  "environment": {
+    "helix_version": "0.13.0",
+    "python": "3.11.2",
+    "torch": "2.5.1+cu124",
+    "numpy": "1.26.4",
+    "device": "cpu",
+    "threads": 2,
+    "accelerator": "cpu",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.36"
+  },
+  "provenance": {
+    "helix_version": "0.13.0",
+    "git_commit": "14c20bccd26a7c316a56048e9600705de2131aba",
+    "corpus": {
+      "path": "corpus.txt",
+      "sha256": "97a20dc524825f488f9c5df6c203f6bad4e3af827039491e643fc0b5764ead69",
+      "bytes": 102879
+    },
+    "train_ids": {
+      "path": "train.npy",
+      "sha256": "2f5028042e07287485a9e1fd595f8a30c7ef3ccd48204e668c05c399eafb41a1",
+      "bytes": 398920
+    },
+    "val_ids": {
+      "path": "val.npy",
+      "sha256": "1ec65d38ad66d6449c22eebcc19d5c8a2d8aa0832f3968462737e9de4d9f5d22",
+      "bytes": 20224
+    },
+    "vocab": {
+      "path": "vocab.json",
+      "sha256": "0404923d4db9ff00fe91d88976b0793802aa8d9c12ec5be62d1f8c2cdf2d9416",
+      "bytes": 7722
+    },
+    "merges": {
+      "path": "merges.json",
+      "sha256": "0d44329bbb1e57138dc4bc0a9732e77010e7598aecad1e905f495cb7b1048393",
+      "bytes": 4180
+    },
+    "data_meta": {
+      "corpus_sha256": "97a20dc524825f488f9c5df6c203f6bad4e3af827039491e643fc0b5764ead69",
+      "train_documents": 462,
+      "val_documents": 52,
+      "train_tokens": 49849,
+      "val_tokens": 2512,
+      "tokenizer_trained_on": "train only",
+      "vocab_size": 512,
+      "vocab_target": 512,
+      "train_fraction": 0.9,
+      "file_sha256": {
+        "train": "2f5028042e07287485a9e1fd595f8a30c7ef3ccd48204e668c05c399eafb41a1",
+        "val": "1ec65d38ad66d6449c22eebcc19d5c8a2d8aa0832f3968462737e9de4d9f5d22",
+        "vocab": "0404923d4db9ff00fe91d88976b0793802aa8d9c12ec5be62d1f8c2cdf2d9416",
+        "merges": "0d44329bbb1e57138dc4bc0a9732e77010e7598aecad1e905f495cb7b1048393"
+      }
+    }
+  }
+}

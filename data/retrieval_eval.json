@@ -1,0 +1,61 @@
+{
+  "description": "Small labelled retrieval set over the repository's own documentation. A case may accept several documents when the fact legitimately appears in more than one. Written after the documents, so it shares vocabulary with them: indicative, not a general benchmark.",
+  "corpus_root": "docs",
+  "cases": [
+    {
+      "query": "what is the parameter count of the trained transformer",
+      "expected": [
+        "MEASUREMENTS.md",
+        "MODEL_CARD.md",
+        "RESEARCH_LEDGER.md"
+      ]
+    },
+    {
+      "query": "what blocks deploying this branch to production",
+      "expected": "STATUS.md"
+    },
+    {
+      "query": "which Android permissions are removed from the manifest",
+      "expected": "STATUS.md"
+    },
+    {
+      "query": "compute lock released when a streaming client disconnects",
+      "expected": "STATUS.md"
+    },
+    {
+      "query": "gradient clipping and non-finite loss handling during training",
+      "expected": "MEASUREMENTS.md"
+    },
+    {
+      "query": "model cards and safety limitations of the published checkpoints",
+      "expected": "MODEL_CARD.md"
+    },
+    {
+      "query": "how are source licenses attested and quarantined",
+      "expected": "PROVENANCE.md"
+    },
+    {
+      "query": "how do I reproduce the training runs on a CPU",
+      "expected": "REPRODUCIBILITY.md"
+    },
+    {
+      "query": "instruction tuning held-out split and pair hashing",
+      "expected": "SFT_DATA.md"
+    },
+    {
+      "query": "architecture boundaries between the web server and the tool layer",
+      "expected": "ARCHITECTURE.md"
+    },
+    {
+      "query": "which documents are included in the starter corpus",
+      "expected": "DATA_PIPELINE.md"
+    },
+    {
+      "query": "where should runtime artifacts and checkpoints be stored instead of the repository",
+      "expected": "USAGE.md"
+    }
+  ],
+  "exclude": [
+    "measurements"
+  ]
+}

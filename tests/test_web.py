@@ -35,7 +35,7 @@ def client(app):
 def test_index_status_static_and_security_headers(client):
     response = client.get('/')
     assert response.status_code == 200
-    for text in (b'HELIX', b'Chat', b'Image Generation', b'Coding Agent', b'Research Lab'):
+    for text in (b'Beta by helix', b'New chat', b'History', b'Image studio', b'Research', b'Settings'):
         assert text in response.data
     assert response.headers['X-Content-Type-Options'] == 'nosniff'
     assert "script-src 'self'" in response.headers['Content-Security-Policy']

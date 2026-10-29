@@ -98,6 +98,74 @@ def load_checkpoint(
     return ckpt
 
 
+def _peak_rss_mb() -> float:
+    """Maximum resident set size of this process, in MiB (Linux/macOS)."""
+    try:
+        import resource
+        return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1)
+    except Exception:  # pragma: no cover - platform dependent
+        return 0.0
+
+
+def _environment(device: str) -> dict:
+    import platform
+    import torch
+
+    from helix import __version__ as helix_version
+
+    try:
+        import numpy as _np
+        numpy_version = _np.__version__
+    except Exception:  # pragma: no cover
+        numpy_version = "unavailable"
+    return {"helix_version": helix_version, "python": platform.python_version(),
+            "torch": torch.__version__, "numpy": numpy_version,
+            "device": str(device), "threads": torch.get_num_threads(),
+            "accelerator": "cuda" if torch.cuda.is_available() else
+                           ("mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu"),
+            "platform": platform.platform()}
+
+
+def _provenance(cfg) -> dict:
+    """Record exactly which data, tokenizer and code produced this run."""
+    import hashlib
+    import subprocess
+
+    from helix import __version__ as helix_version
+
+    def digest(path: str) -> dict:
+        if not path or not os.path.isfile(path):
+            return {"path": os.path.basename(path or ""), "sha256": None, "bytes": None}
+        hasher = hashlib.sha256()
+        with open(path, "rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                hasher.update(block)
+        return {"path": os.path.basename(path), "sha256": hasher.hexdigest(),
+                "bytes": os.path.getsize(path)}
+
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+                                timeout=5, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        git_commit = commit.stdout.strip() if commit.returncode == 0 else "unknown"
+    except Exception:  # pragma: no cover - git may be unavailable
+        git_commit = "unknown"
+    meta = {}
+    meta_path = cfg.data.train_file + ".meta.json"
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, encoding="utf-8") as handle:
+                meta = json.load(handle)
+        except (OSError, ValueError):
+            meta = {}
+    return {"helix_version": helix_version, "git_commit": git_commit,
+            "corpus": digest(cfg.data.corpus_file),
+            "train_ids": digest(cfg.data.train_file),
+            "val_ids": digest(cfg.data.val_file),
+            "vocab": digest(cfg.data.vocab_file),
+            "merges": digest(cfg.data.merges_file),
+            "data_meta": meta}
+
+
 def train(config_path: str) -> None:
     cfg = load_config(config_path)
     save_config(cfg, config_path)
@@ -181,6 +249,7 @@ def train(config_path: str) -> None:
     device_type = "cuda" if str(device).startswith("cuda") else "cpu"
     autocast_dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16}.get(cfg.train.dtype)
     scaler = torch.amp.GradScaler("cuda", enabled=(device_type == "cuda" and cfg.train.dtype == "float16"))
+    allow_nonfinite_skip = os.getenv("HELIX_ALLOW_NONFINITE_SKIP", "").strip().lower() in ("1", "true", "yes", "on")
 
     iter_num = 0
     best_val = float("inf")
@@ -205,6 +274,10 @@ def train(config_path: str) -> None:
     model.train()
     t0 = time.time()
     running_loss = 0.0
+    skipped_steps = 0
+    nonfinite_events = 0
+    last_grad_norm = 0.0
+    loss_was_nonfinite = False
 
     while iter_num < cfg.train.max_iters:
         lr = get_lr(iter_num, cfg.train)
@@ -226,12 +299,35 @@ def train(config_path: str) -> None:
                 _, loss = model(X, Y)
                 loss = loss / cfg.train.gradient_accumulation_steps
             if not torch.isfinite(loss):
-                raise RuntimeError(f"non-finite loss at iteration {iter_num}")
+                nonfinite_events += 1
+                optimizer.zero_grad(set_to_none=True)
+                if not allow_nonfinite_skip:
+                    raise RuntimeError(
+                        f"non-finite loss at iteration {iter_num}; lower the learning rate or "
+                        "set HELIX_ALLOW_NONFINITE_SKIP=1 to skip such steps and record them")
+                skipped_steps += 1
+                loss_was_nonfinite = True
+                break
             scaler.scale(loss).backward()
             running_loss += loss.item()
 
+        if loss_was_nonfinite:
+            loss_was_nonfinite = False
+            iter_num += 1
+            continue
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip)
+        if not torch.isfinite(torch.as_tensor(grad_norm)):
+            nonfinite_events += 1
+            optimizer.zero_grad(set_to_none=True)
+            skipped_steps += 1
+            if not allow_nonfinite_skip:
+                raise RuntimeError(
+                    f"non-finite gradient norm at iteration {iter_num}; training aborted so a "
+                    "corrupt checkpoint is never written")
+            iter_num += 1
+            continue
+        last_grad_norm = float(grad_norm)
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
@@ -272,10 +368,17 @@ def train(config_path: str) -> None:
     total = time.time() - start_time
     print(f"[HELIX] training done in {total:.1f}s. best_val={best_val:.4f}")
     print(f"[HELIX] artifacts in {cfg.train.out_dir}/")
+    tokens_processed = iter_num * cfg.train.batch_size * cfg.train.block_size * cfg.train.gradient_accumulation_steps
     metrics = {"stage": "pretraining", "initialization": "random" if not cfg.train.resume_from else "resume",
                "config": asdict(cfg), "parameters": n_params, "iterations": iter_num,
-               "train_tokens_processed": iter_num * cfg.train.batch_size * cfg.train.block_size * cfg.train.gradient_accumulation_steps,
-               "best_validation_loss": best_val, "elapsed_s": round(total, 4)}
+               "train_tokens_processed": tokens_processed,
+               "best_validation_loss": best_val, "elapsed_s": round(total, 4),
+               "tokens_per_second": round(tokens_processed / total, 2) if total > 0 else None,
+               "skipped_steps": skipped_steps, "nonfinite_events": nonfinite_events,
+               "last_grad_norm": round(last_grad_norm, 6),
+               "peak_rss_mb": _peak_rss_mb(),
+               "environment": _environment(cfg.train.device),
+               "provenance": _provenance(cfg)}
     with open(os.path.join(cfg.train.out_dir, "metrics.json"), "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
     return metrics

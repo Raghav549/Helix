@@ -28,5 +28,6 @@ helix = "helix.cli:main"
 [tool.setuptools.packages.find]
 include = ["helix*"]
 
-[tool.setuptools.package-data]
-helix = ["static/*"]
+# The web client lives in the repository-level public/ directory so the Vercel
+# static deployment and the Flask server always serve identical bytes. It is
+# therefore not package data; deploy the repository, not an sdist.

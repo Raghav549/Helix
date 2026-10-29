@@ -1,0 +1,126 @@
+name: Mobile (Android)
+
+# Validates the Expo app on every change and builds an installable APK.
+# Signing keys are never committed: they are read from repository secrets and
+# only used inside the build job. Without those secrets the job still produces
+# an installable *debug* APK and says so in the artifact name.
+
+on:
+  push:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile-android.yml'
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: mobile
+
+jobs:
+  validate:
+    name: Validate (types, tests, config)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.3'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: TypeScript
+        run: npx tsc --noEmit
+      - name: Logic tests (SSE parsing, sessions, tokens, client errors)
+        run: npm run test:logic
+      - name: Expo config is valid
+        run: npx expo config --type public > /dev/null
+      - name: Dependency versions match the Expo SDK
+        run: npm run check:versions
+      - name: No secrets tracked
+        run: |
+          if git ls-files -- '*.jks' '*.keystore' '*.p12' '*.p8' '*.env' | grep -q .; then
+            echo "Signing material or env files must never be committed." >&2
+            exit 1
+          fi
+
+  build:
+    name: Build APK
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.3'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate native project
+        run: npx expo prebuild --platform android --no-install
+      - name: Configure release signing when secrets are present
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No signing secrets configured; building a debug APK."
+            echo "BUILD_VARIANT=assembleDebug" >> "$GITHUB_ENV"
+            echo "APK_PATH=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
+            echo "ARTIFACT_SUFFIX=debug" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+          {
+            echo "MYAPP_RELEASE_STORE_FILE=release.keystore"
+            echo "MYAPP_RELEASE_KEY_ALIAS=$KEY_ALIAS"
+            echo "MYAPP_RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "MYAPP_RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> android/gradle.properties
+          echo "BUILD_VARIANT=assembleRelease" >> "$GITHUB_ENV"
+          echo "APK_PATH=android/app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_ENV"
+          echo "ARTIFACT_SUFFIX=signed-release" >> "$GITHUB_ENV"
+      - name: Build
+        run: cd android && ./gradlew ${{ env.BUILD_VARIANT }} --no-daemon
+      - name: Verify the APK exists
+        run: |
+          test -f "$APK_PATH" || { echo "Expected $APK_PATH was not produced." >&2; exit 1; }
+          "$ANDROID_HOME"/build-tools/*/aapt2 dump badging "$APK_PATH" || true
+      - name: Checksum
+        run: sha256sum "$APK_PATH" > apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beta-by-helix-${{ env.ARTIFACT_SUFFIX }}
+          path: |
+            mobile/${{ env.APK_PATH }}
+            mobile/apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Release (signed builds on tags only)
+        if: startsWith(github.ref, 'refs/tags/') && env.ARTIFACT_SUFFIX == 'signed-release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            mobile/${{ env.APK_PATH }}
+            mobile/apk.sha256

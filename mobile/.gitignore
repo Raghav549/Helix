@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+.build/
+dist/
+*.jks
+*.keystore
+*.p8
+*.p12
+secrets/
+.env
