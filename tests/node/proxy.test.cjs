@@ -302,3 +302,17 @@ test('logs never contain credentials, prompts or authorization headers', async (
   assert.equal(upstreamHeaders['x-forwarded-proto'], 'https');
   await close(proxy.server, mock.server);
 });
+
+test('unknown /api paths are forwarded so the backend owns routing', async () => {
+  const mock = await upstream((req, res) => {
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Unknown HELIX API route.', code: 'route_not_found' }));
+  });
+  const proxy = await proxyServer(mock.base);
+  const response = await fetch(`${proxy.base}/api/not-a-real-route`);
+  assert.equal(response.status, 404);
+  const body = await response.json();
+  assert.equal(body.code, 'route_not_found');
+  assert.ok(mock.state.requests.some((request) => request.url.startsWith('/api/not-a-real-route')));
+  await close(proxy.server, mock.server);
+});

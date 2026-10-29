@@ -47,9 +47,12 @@ outputs; do not use them for safety-critical decisions.
                     (audit, images, memory)             checkpoints, tokenised data, pairs
 ```
 
-The Vercel layer is a dumb, defensive proxy: it never renders HTML as JSON, rejects
-unknown `/api/*` routes itself, maps upstream timeouts to `504`, intercepts provider
-error pages, forwards SSE without buffering, and adds a request id to every response.
+The Vercel layer is a defensive proxy: it never lets HTML reach the browser as JSON,
+maps upstream timeouts to `504`, intercepts provider error pages, forwards SSE without
+buffering, rejects non-`/api` paths itself with a JSON `404 route_not_found`, and adds a
+request id to every response. Unknown `/api/*` paths are forwarded so the backend owns
+routing; when the backend is unreachable they come back as a JSON `503 render_cold_start`
+rather than an HTML page.
 The Flask layer owns the API contract and returns JSON for every `/api/*` path, including
 404/405/413/429/500.
 

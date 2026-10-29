@@ -28,7 +28,9 @@ lists the exact blockers. Nothing below is inferred from a dashboard status.
 | Item | State |
 | --- | --- |
 | Render backend `helix-chat.onrender.com` | Still serving Render's "Application loading" HTML to `/healthz` and to `/api/status` via Vercel. The latest recorded Render deploy says success, but the service does not serve responses. |
-| Vercel frontend `helix-web-lemon.vercel.app` | Serves the page, but `/api/status` returns the upstream HTML interstitial, so the deployed backend is not answering even with the rewritten proxy. |
+| Vercel **preview** of this branch | Verified live: `helix-web-git-arena-70d7f428-helix-raghav549s-projects.vercel.app` serves the new "Beta by helix" client and `/api/status` now returns JSON `503 {"code":"render_cold_start", ... "upstream_content_type":"text/html; charset=utf-8"}` instead of HTML. The browser no longer sees a JSON parse error. |
+| Vercel production `helix-web-lemon.vercel.app` | Still on the previous build (HTML interstitial), because production deploys from `main`. Merging PR #15 ships the fix. |
+| Render backend (all environments) | Returns HTTP 503 with `text/html` for `/healthz`, `/api/status` and every API route; the proxy now reports that as JSON. |
 | Production browser chat | Cannot pass until the Render service serves. The HTML-as-JSON failure mode is fixed and tested in this branch (proxy returns `503 render_cold_start` with JSON), but that code is not deployed from this branch. |
 | Android APK artifact | **Produced by CI**: run [40837220492](https://github.com/Raghav549/Helix/actions/runs/40837220492) built `assembleDebug` and uploaded the artifact `beta-by-helix-debug-unsigned-release` (55,995,560 bytes, expires 2026-11-12). It is a debug APK, not a signed release; no APK is committed to the repository. |
 | Model quality | Measured, not blocked: 1/5 probes pass, answers are frequently incoherent. Improvements beyond the current scale need more compute than a free CPU tier provides. |
