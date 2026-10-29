@@ -1,0 +1,11 @@
+Forecasting baseline
+====================
+
+A linear trend with an uncertainty interval is the baseline for HELIX numeric
+forecasting. The baseline is fitted by ordinary least squares on a chronological
+split; the last portion of the series is held out for scoring.
+
+Reported error uses mean absolute error and root mean squared error on the
+holdout. An interval is reported as a 90 percent prediction interval derived
+from the residual standard error. A forecast without a stated horizon and
+baseline is not a verified prediction.

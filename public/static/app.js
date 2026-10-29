@@ -28,6 +28,7 @@ const state = {
     displayName: '',
     useSources: true,
     useMemory: false,
+    agentMode: false,
   },
 };
 
@@ -545,6 +546,14 @@ async function sendMessage(text) {
   if (message.length > LIMITS.message) { toast('Messages are limited to 4000 characters.', 'error'); return; }
   if (state.streaming) return;
 
+  if (state.settings.agentMode) {
+    appendMessage({ role: 'user', content: message });
+    $('#composer-input').value = '';
+    autoGrow($('#composer-input'));
+    await runAgent(message);
+    return;
+  }
+
   if (state.attachment) {
     const attachment = state.attachment;
     appendMessage({ role: 'user', content: `${message}\n\n[attached: ${attachment.name}]` });
@@ -827,6 +836,104 @@ async function runQuickAction(action) {
     }
     default:
       toast('That action is not wired to a backend capability.', 'info');
+  }
+}
+
+/* ----------------------------------------------------------------- agent -- */
+
+function parseSeries(text) {
+  return String(text || '')
+    .split(/[,\s]+/)
+    .map((piece) => piece.trim())
+    .filter(Boolean)
+    .map(Number)
+    .filter((value) => Number.isFinite(value));
+}
+
+async function runAgent(message) {
+  const node = appendMessage({ role: 'assistant', kind: 'tool', tool: 'orchestrator', content: 'Planning…' });
+  const textNode = $('.message-text', node);
+  setActivity('thinking', 'active');
+  try {
+    const body = { message, use_sources: state.settings.useSources };
+    const numbers = parseSeries(message);
+    if (numbers.length >= 3) body.series = numbers;
+    const data = await requestJson('/api/agent', { method: 'POST', json: body, timeoutMs: 180000 });
+    textNode.textContent = data.answer || '(no answer)';
+    const bodyNode = $('.message-body', node);
+    const meta = document.createElement('div');
+    meta.className = 'message-meta';
+    (data.tool_calls || []).forEach((call) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = `${call.tool} · ${call.ok ? 'ok' : 'failed'} · ${Math.round(call.duration_ms)}ms`;
+      meta.append(chip);
+    });
+    (data.refused || []).forEach((refusal) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = 'refused';
+      chip.title = refusal;
+      meta.append(chip);
+    });
+    if (data.classification) {
+      const kindChip = document.createElement('span');
+      kindChip.className = 'chip';
+      kindChip.textContent = data.classification;
+      meta.prepend(kindChip);
+    }
+    bodyNode.append(meta);
+    const thread = activeThread();
+    if (thread) {
+      const stored = thread.messages[thread.messages.length - 1];
+      if (stored && stored.kind === 'tool') {
+        stored.content = textNode.textContent;
+        stored.tool = 'orchestrator';
+      }
+      thread.updatedAt = Date.now();
+      saveStore();
+    }
+    setActivity('thinking', 'done');
+  } catch (error) {
+    textNode.textContent = `Agent request failed: ${error.message}${error.requestId ? ` (request ${error.requestId})` : ''}`;
+    setActivity('thinking', 'idle');
+  } finally {
+    setTimeout(() => resetActivity(), 2500);
+  }
+}
+
+async function runForecast(event) {
+  event.preventDefault();
+  const output = $('#forecast-output');
+  const series = parseSeries($('#forecast-series').value);
+  if (series.length < 3) { output.textContent = 'Enter at least three numbers.'; return; }
+  const button = $('#forecast-submit');
+  button.disabled = true;
+  output.textContent = 'Fitting…';
+  try {
+    const data = await requestJson('/api/research/forecast', {
+      method: 'POST',
+      json: {
+        series,
+        horizon: Number($('#forecast-horizon').value || 3),
+        interval: Number($('#forecast-interval').value || 0.9),
+      },
+    });
+    const lines = data.predictions.map((point) => (
+      `step ${point.x.toFixed(0)}: ${point.yhat} (${Math.round(data.interval * 100)}% interval ${point.lower} … ${point.upper})`
+    ));
+    output.textContent = [
+      ...lines,
+      '',
+      `hold-out MAE ${data.holdout.mae} · RMSE ${data.holdout.rmse} · last-value baseline MAE ${data.holdout.baseline_mae_last_value}`,
+      `beats baseline: ${data.holdout.beats_baseline} · backend: ${data.backend}`,
+      '',
+      ...data.assumptions.map((line) => `• ${line}`),
+    ].join('\n');
+  } catch (error) {
+    output.textContent = `Forecast failed: ${error.message}`;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -1223,6 +1330,25 @@ function bindEvents() {
       recognition.start();
     });
   }
+
+  $('#forecast-form').addEventListener('submit', runForecast);
+
+  const agentToggle = $('#agent-toggle');
+  const syncAgentToggle = () => {
+    agentToggle.setAttribute('aria-pressed', String(Boolean(state.settings.agentMode)));
+    $('#composer-hint').textContent = state.settings.agentMode
+      ? 'Tool mode: math, forecast, sources and code are routed explicitly'
+      : 'Enter to send · Shift+Enter for a new line';
+  };
+  agentToggle.addEventListener('click', () => {
+    state.settings.agentMode = !state.settings.agentMode;
+    saveStore();
+    syncAgentToggle();
+    toast(state.settings.agentMode
+      ? 'Tool mode on: answers report which tools actually ran.'
+      : 'Tool mode off: messages use the language model.', 'info', 3200);
+  });
+  syncAgentToggle();
 
   $('#image-form').addEventListener('submit', generateImage);
   $('#image-mode').addEventListener('change', (event) => {

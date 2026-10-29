@@ -21,6 +21,8 @@ import io
 import json
 import os
 import re
+import shutil
+import sys
 import threading
 import time
 import uuid
@@ -405,7 +407,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
 
     @app.errorhandler(413)
     def too_large(_exc):
-        return jsonify({'error': 'request exceeds 6 MiB'}), 413
+        return api_error('The request exceeds the 6 MiB server limit.', 413, 'request_too_large')
 
     def readiness() -> dict:
         files = model_files()
@@ -516,11 +518,10 @@ def create_app(config_path: str = 'configs/helix-research.json',
         })
 
     def start_chat(body, streaming):
-        unavailable = startup_failure or (None if model_files()['llm'] else 'language model artifacts are missing')
-        if unavailable:
+        if startup_failure:
             return api_error('The language model is not available on this deployment.',
                              503, 'model_unavailable',
-                             detail=f'{unavailable}. See /api/diagnostics for artifact state.',
+                             detail=f'{startup_failure}. See /api/diagnostics for artifact state.',
                              retryable=False)
         try:
             prompt, message = chat_prompt(body)
@@ -556,9 +557,10 @@ def create_app(config_path: str = 'configs/helix-research.json',
             api_metrics['chat_failures'] += 1
             access_log.log(request_id=g.request_id, event='model_load_failed',
                            error=_sanitize_exception(exc))
-            return api_error('The language model could not be loaded for this request.',
-                             503, 'model_load_failed',
-                             detail='Checkpoint or tokenizer failed to load. See /api/diagnostics.',
+            return api_error('The language model is not available on this deployment.',
+                             503, 'model_unavailable',
+                             detail='The checkpoint or tokenizer could not be loaded; see /api/diagnostics '
+                                    'for artifact state. Verification of the request itself succeeded.',
                              retryable=False)
         from helix.infer import stream_generate
         api_metrics['chats'] += 1
@@ -926,6 +928,131 @@ def create_app(config_path: str = 'configs/helix-research.json',
                                         'best_loss': data.get('best_validation_loss', data.get('best_sft_val_loss', data.get('best_loss', data.get('best_heldout_loss'))))})
                     except (OSError, ValueError): continue
         return jsonify({'experiments': entries})
+
+    @app.post('/api/research/forecast')
+    def research_forecast():
+        try:
+            body = _json_body()
+            horizon = int(body.get('horizon', 3))
+            interval = float(body.get('interval', 0.90))
+        except (ValueError, TypeError) as exc:
+            return api_error(str(exc), 400, 'invalid_request')
+        series = body.get('series')
+        try:
+            if series is None:
+                text = body.get('csv', '')
+                column = body.get('column', '')
+                if not isinstance(text, str) or not isinstance(column, str) or not column:
+                    raise ValueError('send `series` (numbers) or `csv` plus `column`')
+                from helix.research import load_csv
+                header, rows = load_csv(text)
+                if column not in header:
+                    raise ValueError('column not found in the CSV header')
+                index = header.index(column)
+                values = []
+                for row in rows:
+                    if index >= len(row):
+                        continue
+                    try:
+                        values.append(float(row[index]))
+                    except ValueError:
+                        continue
+                series = values
+            if not isinstance(series, list):
+                raise ValueError('`series` must be a list of numbers')
+            from helix.numerics import linear_forecast
+            result = linear_forecast(series, horizon=horizon, interval=interval)
+        except (ValueError, TypeError) as exc:
+            return api_error(str(exc), 400, 'invalid_series')
+        audit('research_forecast', True)
+        return jsonify({**result, 'request_id': g.request_id,
+                        'notice': ('Tool output from helix.numerics; the Fortran kernel is used when '
+                                   'compiled, otherwise the verified pure-Python implementation runs. '
+                                   'This is a fitted trend, not a verified prediction of the future.')})
+
+    @app.post('/api/agent')
+    def agent_run():
+        try:
+            body = _json_body()
+            message = body.get('message', '')
+            if not isinstance(message, str) or not 1 <= len(message.strip()) <= 4000:
+                raise ValueError('message must contain 1..4000 characters')
+            series = body.get('series')
+            if series is not None and (not isinstance(series, list) or len(series) > 5000):
+                raise ValueError('series must be a list of at most 5000 numbers')
+            horizon = int(body.get('horizon', 3))
+            approved = body.get('approved') is True
+        except (ValueError, TypeError) as exc:
+            return api_error(str(exc), 400, 'invalid_request')
+
+        from helix.orchestrator import Orchestrator
+        from helix.research import run_bounded_math
+        from helix.numerics import linear_forecast
+        from helix.sandbox import run_python
+
+        def symbolic_tool(arguments):
+            return run_bounded_math(arguments.get('operation', 'differentiate'),
+                                    arguments.get('expression', ''),
+                                    arguments.get('variable', 'x'))
+
+        def forecast_tool(arguments):
+            return linear_forecast(arguments['series'], horizon=arguments.get('horizon', horizon))
+
+        def search_tool(arguments):
+            index = _retrieval_index()
+            if index is None:
+                raise RuntimeError('no retrieval index configured')
+            results = [chunk.to_dict() for chunk in index.search(arguments.get('query', ''),
+                                                                 k=int(arguments.get('k', 4)))]
+            return {'summary': f'{len(results)} passages', 'results': results}
+
+        def execute_tool(arguments):
+            outcome = run_python(arguments.get('code', ''), timeout_s=10, memory_mb=256)
+            return {'ok': outcome.ok, 'output': outcome.output, 'error': outcome.error,
+                    'isolation': outcome.isolation, 'summary': 'sandbox run'}
+
+        generate = None
+        if not startup_failure and model_files()['llm']:
+            def generate(prompt):
+                if not compute.acquire(blocking=False):
+                    raise RuntimeError('another compute task is running')
+                try:
+                    from helix.infer import stream_generate
+                    model, tok, cfg = models.llm(config_path, llm_checkpoint)
+                    return ''.join(stream_generate(model, tok, prompt, 96, temperature=.7, top_k=40,
+                                                   device=cfg.train.device))
+                finally:
+                    compute.release()
+
+        try:
+            index_available = _retrieval_index() is not None
+        except (OSError, ValueError):
+            index_available = False
+        orchestrator = Orchestrator(
+            {'symbolic_math': symbolic_tool, 'linear_forecast': forecast_tool,
+             'document_search': search_tool, 'code_execution': execute_tool},
+            generate=generate,
+            documents_available=index_available,
+            sandbox_available=bool(sys.platform.startswith('linux')
+                                   and shutil.which('unshare') and shutil.which('mount')),
+        )
+        try:
+            result = orchestrator.run(message, request_id=g.request_id, approved=approved,
+                                      series=series, horizon=horizon,
+                                      operation=str(body.get('operation', 'differentiate'))[:32],
+                                      expression=str(body.get('expression', ''))[:512],
+                                      variable=str(body.get('variable', 'x'))[:30])
+        except ValueError as exc:
+            return api_error(str(exc), 400, 'invalid_request')
+        except Exception as exc:  # noqa: BLE001 - the orchestrator must never 500 the UI
+            access_log.log(request_id=g.request_id, event='orchestrator_failed',
+                           error=_sanitize_exception(exc))
+            return api_error('The agent could not complete this request.', 500, 'agent_failed')
+        audit('agent_run', True, message)
+        payload = result.to_dict()
+        payload['notice'] = ('The answer above lists exactly which tools ran. Tool output is separate '
+                            'from model output; a tool that did not run produced no claim.')
+        return jsonify(payload)
 
     def _retrieval_index():
         if not retrieval_dir:
