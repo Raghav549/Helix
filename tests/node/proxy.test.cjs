@@ -316,3 +316,18 @@ test('unknown /api paths are forwarded so the backend owns routing', async () =>
   assert.ok(mock.state.requests.some((request) => request.url.startsWith('/api/not-a-real-route')));
   await close(proxy.server, mock.server);
 });
+
+test('an unreachable upstream that returns HTML is reported as outdated, not as a parse error', async () => {
+  const mock = await upstream((req, res) => {
+    res.writeHead(404, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><title>The page could not be found</title>');
+  });
+  const proxy = await proxyServer(mock.base);
+  const response = await fetch(`${proxy.base}/api/health`);
+  assert.equal(response.status, 502);
+  assert.match(response.headers.get('content-type') || '', /application\/json/);
+  const body = await response.json();
+  assert.equal(body.code, 'upstream_non_json');
+  assert.equal(body.upstream_status, 404);
+  await close(proxy.server, mock.server);
+});

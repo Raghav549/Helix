@@ -71,6 +71,24 @@ data, nothing whose licence is unknown.
 | Wall clock | 6.90 s |
 | Pairs sha256 | `14fc8038…` (pairs file is hashed into the metrics) |
 
+## Stage 2b — instruction-tuning scaling (and why the default stops at 60 steps)
+
+Same base checkpoint, same 516 pairs (465 train / 51 held-out), same seed, only the number
+of SFT steps changed. Every evaluation uses 50 sampled held-out batches so the columns are
+comparable.
+
+| SFT steps | train loss | SFT held-out loss | validation loss | perplexity | probes passed |
+| --- | --- | --- | --- | --- | --- |
+| 60 (default) | 3.3516 | 3.5044 | 4.977 | 145.0 | 1/5 |
+| 300 | 2.9000 | 3.1111 | 5.172 | 176.2 | 1/5 |
+| 1000 | 2.2669 | 2.5241 | 5.857 | 349.7 | 1/5 |
+
+More instruction tuning keeps improving the instruction-format held-out loss while the
+general validation loss gets steadily worse and no capability probe changes. At this model
+size that is overfitting to a narrow synthetic instruction distribution, so the default
+checkpoint stays at 60 steps and the longer runs are recorded as a negative result rather
+than shipped. Raw data: [`docs/measurements/sft-scaling.json`](measurements/sft-scaling.json).
+
 ## Stage 3 — evaluation on the SFT checkpoint
 
 Three of the five tasks are deliberately hard for a 0.8 M-parameter model, and the

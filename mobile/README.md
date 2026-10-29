@@ -60,7 +60,7 @@ single non-streaming request and renders that reply, marked as a normal answer.
 
 ## Testing and builds
 
-* `npm run test:logic` — 29 assertions over SSE parsing, session persistence, error
+* `npm run test:logic` — 30 assertions over SSE parsing, session persistence, error
   mapping (HTML error pages are never parsed as JSON), token drift versus the web CSS,
   Basic auth encoding and analysis formatting.
 * `npx expo export --platform android` was verified locally: 770 modules bundled to

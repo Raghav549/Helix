@@ -25,7 +25,7 @@ import { Sidebar } from '../components/Sidebar';
 import { Wordmark } from '../components/Logo';
 import { useTheme } from '../hooks/useTheme';
 import { formatAnalysis, quickActionPrompt } from '../lib/analysis';
-import { summarizeHealth } from '../lib/format';
+import { healthNotice, summarizeHealth } from '../lib/format';
 import { greetingFor, normalizeBaseUrl } from '../lib/sse';
 import {
   SessionRepository,
@@ -67,6 +67,7 @@ export function ChatScreen() {
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [healthChecked, setHealthChecked] = useState(false);
+  const [healthError, setHealthError] = useState<{ kind?: string; message?: string } | null>(null);
   const cancelRef = useRef<{ cancelled: boolean } | null>(null);
   const sessionsRef = useRef<Session[]>([]);
   const listRef = useRef<FlatList<StoredMessage>>(null);
@@ -111,8 +112,14 @@ export function ChatScreen() {
   const refreshHealth = useCallback(async () => {
     try {
       setHealth(await client.health());
-    } catch {
+      setHealthError(null);
+    } catch (error) {
       setHealth(null);
+      setHealthError(
+        error instanceof ApiError
+          ? { kind: error.kind, message: error.message }
+          : { kind: 'offline', message: error instanceof Error ? error.message : undefined },
+      );
     } finally {
       setHealthChecked(true);
     }
@@ -426,12 +433,10 @@ export function ChatScreen() {
                 Ask a question, or start with a task. Every card below runs a real HELIX endpoint.
               </Text>
               <QuickActions onSelect={onQuickAction} disabled={busy} />
-              {healthChecked && status.tone !== 'ready' && (
+              {healthChecked && (
                 <View style={[styles.health, { borderColor: theme.palette.line, backgroundColor: theme.palette.paperSoft }]}>
                   <Text style={[styles.healthText, { color: theme.palette.ink }]}>
-                    {status.tone === 'down'
-                      ? `Cannot reach ${baseUrl}. Check the API URL and credentials in Settings.`
-                      : 'The server is up but the model is not loaded, so chat replies may be unavailable. Tools still work.'}
+                    {healthNotice(baseUrl, status.tone, healthError) ?? `Connected to ${baseUrl}.`}
                   </Text>
                 </View>
               )}
