@@ -80,7 +80,7 @@ def test_chat_memory_only_when_opted_in(client, monkeypatch):
     monkeypatch.setattr(helix.infer, 'stream_generate', fake_stream)
     monkeypatch.setattr(web.ModelCache, 'llm', lambda self, config, checkpoint: (None, None, SimpleNamespace(train=SimpleNamespace(device='cpu'))))
     client.post('/api/memory', json={'text': 'private-locally-saved-note', 'consent': True})
-    assert client.post('/api/chat', json={'message': 'hello'}).status_code == 200
+    assert client.post('/api/chat', json={'message': 'Explain how a compiler works.'}).status_code == 200
     assert 'private-locally-saved-note' not in prompts[-1]
     assert client.post('/api/chat', json={'message': 'hello', 'use_memory': True}).status_code == 200
     assert 'private-locally-saved-note' in prompts[-1]
