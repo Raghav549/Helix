@@ -1154,6 +1154,12 @@ def create_app(config_path: str = 'configs/helix-research.json',
     def _retrieval_index():
         if not retrieval_dir:
             return None
+        # An empty Knowledge Mill index directory is created on startup so
+        # uploads have a destination. That directory alone is not a configured
+        # retrieval index; only a persisted index.json is loadable.
+        index_path = Path(retrieval_dir) / 'index.json'
+        if not index_path.is_file():
+            return None
         from helix.retrieval import RetrievalIndex
         return RetrievalIndex.load(retrieval_dir)
 
