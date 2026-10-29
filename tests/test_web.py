@@ -82,7 +82,7 @@ def test_chat_memory_only_when_opted_in(client, monkeypatch):
     client.post('/api/memory', json={'text': 'private-locally-saved-note', 'consent': True})
     assert client.post('/api/chat', json={'message': 'Explain how a compiler works.'}).status_code == 200
     assert 'private-locally-saved-note' not in prompts[-1]
-    assert client.post('/api/chat', json={'message': 'hello', 'use_memory': True}).status_code == 200
+    assert client.post('/api/chat', json={'message': 'Explain a compiler using the saved note.', 'use_memory': True}).status_code == 200
     assert 'private-locally-saved-note' in prompts[-1]
 
 
