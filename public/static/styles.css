@@ -668,3 +668,26 @@ input[type="range"] { width: 100%; accent-color: var(--pink); }
 @media print {
   .sidebar, .topbar, .composer-dock, .activity-row, .toast-stack { display: none !important; }
 }
+
+
+/* Product layout: match the dark Beta reference and keep chat controls stable. */
+.sidebar-status,
+.topbar-actions .status-pill,
+.view-chat .activity-row,
+.view-chat .fine-print { display: none !important; }
+
+.view-chat { flex: 1; min-height: calc(100dvh - 112px); }
+.view-chat.has-messages #greeting-block,
+.view-chat.has-messages #quick-actions { display: none !important; }
+.view-chat .thread { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.view-chat .composer-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 12;
+  background: var(--paper);
+  padding-bottom: max(var(--space-3), env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 760px) {
+  .view-chat { min-height: calc(100dvh - 84px); }
+  .view-chat .composer-dock { padding-top: var(--space-2); }
+}
