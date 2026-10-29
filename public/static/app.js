@@ -23,7 +23,7 @@ const state = {
   status: null,
   activity: {},
   settings: {
-    theme: 'system',
+    theme: 'dark',
     reduceMotion: false,
     displayName: '',
     useSources: true,
@@ -488,6 +488,8 @@ function renderThread() {
   const container = $('#thread');
   container.replaceChildren();
   const thread = activeThread();
+  const chatView = $('#view-chat');
+  if (chatView) chatView.classList.toggle('has-messages', Boolean(thread && thread.messages.length));
   if (!thread || !thread.messages.length) {
     const empty = document.createElement('div');
     empty.className = 'thread-empty';
@@ -1432,7 +1434,7 @@ function bindEvents() {
     localStorage.removeItem(STORAGE.active);
     state.threads = [];
     state.activeThreadId = null;
-    state.settings = { theme: 'system', reduceMotion: false, displayName: '', useSources: true, useMemory: false };
+    state.settings = { theme: 'dark', reduceMotion: false, displayName: '', useSources: true, useMemory: false };
     saveStore();
     applyTheme();
     renderGreeting();
