@@ -174,7 +174,9 @@ class RetrievalIndex:
     # -- construction ------------------------------------------------------
     @classmethod
     def ingest(cls, root: str | os.PathLike[str], chunk_chars: int = DEFAULT_CHUNK_CHARS,
-               overlap: int = DEFAULT_OVERLAP_CHARS, max_chunks_per_document: int = 400) -> 'RetrievalIndex':
+               overlap: int = DEFAULT_OVERLAP_CHARS, max_chunks_per_document: int = 400,
+               exclude: Sequence[str] = ()) -> 'RetrievalIndex':
+        """Index a directory. `exclude` holds relative path prefixes to skip."""
         if chunk_chars < 120 or chunk_chars > 4000:
             raise ValueError('chunk_chars must be between 120 and 4000')
         if not 0 <= overlap < chunk_chars // 2:
@@ -182,6 +184,7 @@ class RetrievalIndex:
         root_path = Path(root)
         if not root_path.is_dir():
             raise ValueError('retrieval root must be an existing directory')
+        skip_prefixes = tuple(prefix.strip('/') + '/' for prefix in exclude if prefix and prefix.strip('/'))
         manifest = {}
         manifest_path = root_path / 'helix-retrieval.json'
         if manifest_path.is_file():
@@ -205,6 +208,8 @@ class RetrievalIndex:
             except OSError:
                 continue
             relative = path.relative_to(root_path).as_posix()
+            if skip_prefixes and relative.startswith(skip_prefixes):
+                continue
             doc_id = hashlib.sha256(relative.encode('utf-8')).hexdigest()[:16]
             title = path.stem.replace('_', ' ').replace('-', ' ').strip() or relative
             pages: Optional[List[str]] = None

@@ -1,0 +1,369 @@
+{
+  "retriever": "bm25+hashed-bow-cosine",
+  "corpus_root": "docs",
+  "exclude": [
+    "measurements"
+  ],
+  "documents": 11,
+  "chunks": 78,
+  "index_checksum": "4fcbd1640efc13a359ab864f7c6e19600f3a0c978e108964654f36275c58a1a4",
+  "k": 4,
+  "total": 12,
+  "recall_at_1": 0.75,
+  "recall_at_4": 0.8333,
+  "mrr": 0.7708,
+  "invalid_citations": 0,
+  "caveat": "Small hand-labelled set over the project documentation with a lexical retriever; scores are indicative, not a general retrieval benchmark, and questions were written after the documents were, so they share vocabulary.",
+  "results": [
+    {
+      "query": "what is the parameter count of the trained transformer",
+      "expected": [
+        "MEASUREMENTS.md",
+        "MODEL_CARD.md",
+        "RESEARCH_LEDGER.md"
+      ],
+      "rank": 1,
+      "top": [
+        {
+          "source": "MODEL_CARD.md",
+          "score": 0.7126,
+          "citation": "MODEL_CARD.md#chars=0-745"
+        },
+        {
+          "source": "RESEARCH_LEDGER.md",
+          "score": 0.6315,
+          "citation": "RESEARCH_LEDGER.md#chars=2292-2946"
+        },
+        {
+          "source": "REPRODUCIBILITY.md",
+          "score": 0.612,
+          "citation": "REPRODUCIBILITY.md#chars=3952-4758"
+        },
+        {
+          "source": "MEASUREMENTS.md",
+          "score": 0.5843,
+          "citation": "MEASUREMENTS.md#chars=8615-9102"
+        }
+      ]
+    },
+    {
+      "query": "what blocks deploying this branch to production",
+      "expected": [
+        "STATUS.md"
+      ],
+      "rank": 1,
+      "top": [
+        {
+          "source": "STATUS.md",
+          "score": 0.7421,
+          "citation": "STATUS.md#chars=2811-3572"
+        },
+        {
+          "source": "STATUS.md",
+          "score": 0.6312,
+          "citation": "STATUS.md#chars=2126-2931"
+        },
+        {
+          "source": "STATUS.md",
+          "score": 0.5067,
+          "citation": "STATUS.md#chars=3452-4283"
+        },
+        {
+          "source": "STATUS.md",
+          "score": 0.4837,
+          "citation": "STATUS.md#chars=1384-2246"
+        }
+      ]
+    },
+    {
+      "query": "which Android permissions are removed from the manifest",
+      "expected": [
+        "STATUS.md"
+      ],
+      "rank": 1,
+      "top": [
+        {
+          "source": "STATUS.md",
+          "score": 0.7219,
+          "citation": "STATUS.md#chars=692-1504"
+        },
+        {
+          "source": "STATUS.md",
+          "score": 0.5882,
+          "citation": "STATUS.md#chars=2811-3572"
+        },
+        {
+          "source": "STATUS.md",
+          "score": 0.5559,
+          "citation": "STATUS.md#chars=0-812"
+        },
+        {
+          "source": "STATUS.md",
+          "score": 0.4545,
+          "citation": "STATUS.md#chars=2126-2931"
+        }
+      ]
+    },
+    {
+      "query": "compute lock released when a streaming client disconnects",
+      "expected": [
+        "STATUS.md"
+      ],
+      "rank": 1,
+      "top": [
+        {
+          "source": "STATUS.md",
+          "score": 0.6632,
+          "citation": "STATUS.md#chars=3452-4283"
+        },
+        {
+          "source": "PROVENANCE.md",
+          "score": 0.5079,
+          "citation": "PROVENANCE.md#chars=713-1237"
+        },
+        {
+          "source": "ARCHITECTURE.md",
+          "score": 0.4573,
+          "citation": "ARCHITECTURE.md#chars=0-589"
+        },
+        {
+          "source": "RESEARCH_LEDGER.md",
+          "score": 0.4481,
+          "citation": "RESEARCH_LEDGER.md#chars=2292-2946"
+        }
+      ]
+    },
+    {
+      "query": "gradient clipping and non-finite loss handling during training",
+      "expected": [
+        "MEASUREMENTS.md"
+      ],
+      "rank": 1,
+      "top": [
+        {
+          "source": "MEASUREMENTS.md",
+          "score": 0.7196,
+          "citation": "MEASUREMENTS.md#chars=1928-2801"
+        },
+        {
+          "source": "ARCHITECTURE.md",
+          "score": 0.3796,
+          "citation": "ARCHITECTURE.md#chars=0-589"
+        },
+        {
+          "source": "SFT_DATA.md",
+          "score": 0.2941,
+          "citation": "SFT_DATA.md#chars=636-1497"
+        },
+        {
+          "source": "MEASUREMENTS.md",
+          "score": 0.2915,
+          "citation": "MEASUREMENTS.md#chars=8615-9102"
+        }
+      ]
+    },
+    {
+      "query": "model cards and safety limitations of the published checkpoints",
+      "expected": [
+        "MODEL_CARD.md"
+      ],
+      "rank": 1,
+      "top": [
+        {
+          "source": "MODEL_CARD.md",
+          "score": 0.7139,
+          "citation": "MODEL_CARD.md#chars=0-745"
+        },
+        {
+          "source": "RESEARCH_LEDGER.md",
+          "score": 0.6861,
+          "citation": "RESEARCH_LEDGER.md#chars=1940-2412"
+        },
+        {
+          "source": "PROVENANCE.md",
+          "score": 0.5334,
+          "citation": "PROVENANCE.md#chars=1810-2671"
+        },
+        {
+          "source": "PROVENANCE.md",
+          "score": 0.5248,
+          "citation": "PROVENANCE.md#chars=2551-3418"
+        }
+      ]
+    },
+    {
+      "query": "how are source licenses attested and quarantined",
+      "expected": [
+        "PROVENANCE.md"
+      ],
+      "rank": 1,
+      "top": [
+        {
+          "source": "PROVENANCE.md",
+          "score": 0.6922,
+          "citation": "PROVENANCE.md#chars=0-833"
+        },
+        {
+          "source": "DATA_PIPELINE.md",
+          "score": 0.591,
+          "citation": "DATA_PIPELINE.md#chars=1379-2213"
+        },
+        {
+          "source": "SOURCE_PIPELINE.md",
+          "score": 0.5338,
+          "citation": "SOURCE_PIPELINE.md#chars=1757-2587"
+        },
+        {
+          "source": "ARCHITECTURE.md",
+          "score": 0.524,
+          "citation": "ARCHITECTURE.md#chars=4030-4667"
+        }
+      ]
+    },
+    {
+      "query": "how do I reproduce the training runs on a CPU",
+      "expected": [
+        "REPRODUCIBILITY.md"
+      ],
+      "rank": null,
+      "top": [
+        {
+          "source": "MEASUREMENTS.md",
+          "score": 0.72,
+          "citation": "MEASUREMENTS.md#chars=4861-5730"
+        },
+        {
+          "source": "RESEARCH_LEDGER.md",
+          "score": 0.5261,
+          "citation": "RESEARCH_LEDGER.md#chars=0-862"
+        },
+        {
+          "source": "MODEL_CARD.md",
+          "score": 0.4182,
+          "citation": "MODEL_CARD.md#chars=2557-3373"
+        },
+        {
+          "source": "MEASUREMENTS.md",
+          "score": 0.416,
+          "citation": "MEASUREMENTS.md#chars=5610-6297"
+        }
+      ]
+    },
+    {
+      "query": "instruction tuning held-out split and pair hashing",
+      "expected": [
+        "SFT_DATA.md"
+      ],
+      "rank": 4,
+      "top": [
+        {
+          "source": "MEASUREMENTS.md",
+          "score": 0.7456,
+          "citation": "MEASUREMENTS.md#chars=1928-2801"
+        },
+        {
+          "source": "RESEARCH_LEDGER.md",
+          "score": 0.6756,
+          "citation": "RESEARCH_LEDGER.md#chars=742-1451"
+        },
+        {
+          "source": "DATA_PIPELINE.md",
+          "score": 0.5925,
+          "citation": "DATA_PIPELINE.md#chars=762-1499"
+        },
+        {
+          "source": "SFT_DATA.md",
+          "score": 0.58,
+          "citation": "SFT_DATA.md#chars=0-756"
+        }
+      ]
+    },
+    {
+      "query": "architecture boundaries between the web server and the tool layer",
+      "expected": [
+        "ARCHITECTURE.md"
+      ],
+      "rank": 1,
+      "top": [
+        {
+          "source": "ARCHITECTURE.md",
+          "score": 0.7053,
+          "citation": "ARCHITECTURE.md#chars=3295-4150"
+        },
+        {
+          "source": "ARCHITECTURE.md",
+          "score": 0.6461,
+          "citation": "ARCHITECTURE.md#chars=1896-2787"
+        },
+        {
+          "source": "ARCHITECTURE.md",
+          "score": 0.6071,
+          "citation": "ARCHITECTURE.md#chars=0-589"
+        },
+        {
+          "source": "ARCHITECTURE.md",
+          "score": 0.5486,
+          "citation": "ARCHITECTURE.md#chars=2667-3415"
+        }
+      ]
+    },
+    {
+      "query": "which documents are included in the starter corpus",
+      "expected": [
+        "DATA_PIPELINE.md"
+      ],
+      "rank": 1,
+      "top": [
+        {
+          "source": "DATA_PIPELINE.md",
+          "score": 0.7264,
+          "citation": "DATA_PIPELINE.md#chars=0-882"
+        },
+        {
+          "source": "DATA_PIPELINE.md",
+          "score": 0.7137,
+          "citation": "DATA_PIPELINE.md#chars=2628-3157"
+        },
+        {
+          "source": "REPRODUCIBILITY.md",
+          "score": 0.4001,
+          "citation": "REPRODUCIBILITY.md#chars=4638-5253"
+        },
+        {
+          "source": "PROVENANCE.md",
+          "score": 0.3649,
+          "citation": "PROVENANCE.md#chars=1117-1930"
+        }
+      ]
+    },
+    {
+      "query": "where should runtime artifacts and checkpoints be stored instead of the repository",
+      "expected": [
+        "USAGE.md"
+      ],
+      "rank": null,
+      "top": [
+        {
+          "source": "MEASUREMENTS.md",
+          "score": 0.721,
+          "citation": "MEASUREMENTS.md#chars=4861-5730"
+        },
+        {
+          "source": "MEASUREMENTS.md",
+          "score": 0.6542,
+          "citation": "MEASUREMENTS.md#chars=5610-6297"
+        },
+        {
+          "source": "ARCHITECTURE.md",
+          "score": 0.6177,
+          "citation": "ARCHITECTURE.md#chars=4030-4667"
+        },
+        {
+          "source": "REPRODUCIBILITY.md",
+          "score": 0.4585,
+          "citation": "REPRODUCIBILITY.md#chars=0-734"
+        }
+      ]
+    }
+  ]
+}

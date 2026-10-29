@@ -80,3 +80,30 @@ def test_measurements_document_references_the_committed_reports():
     assert 'docs/measurements/' in text
     assert '803,712' in text
     assert 'not a general' in text.lower() or 'do not show fluent' in text.lower()
+
+
+def test_retrieval_report_matches_a_fresh_measurement():
+    """The committed retrieval report must describe the current documentation.
+
+    If this fails, regenerate with:
+        python scripts/eval_retrieval.py --out docs/measurements/retrieval-eval.json
+    """
+    import subprocess
+    import sys
+    import tempfile
+
+    committed = _load('retrieval-eval.json')
+    root = ROOT / 'docs'
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / 'report.json'
+        subprocess.run(
+            [sys.executable, str(ROOT / 'scripts' / 'eval_retrieval.py'),
+             '--cases', str(ROOT / 'data' / 'retrieval_eval.json'),
+             '--root', str(root), '--out', str(out)],
+            check=True, capture_output=True, cwd=str(ROOT),
+        )
+        fresh = json.loads(out.read_text(encoding='utf-8'))
+    for key in ('documents', 'chunks', 'index_checksum', 'recall_at_1', f'recall_at_{fresh["k"]}', 'mrr',
+                'invalid_citations', 'total'):
+        assert committed[key] == fresh[key], f'retrieval report is stale for {key}'
+    assert committed['invalid_citations'] == 0

@@ -118,6 +118,35 @@ Serving latency observed through the live local server (same machine, model alre
 loaded): first SSE byte after model load, 24 tokens in ≈1.2 s at the default sampling
 settings, and `/api/agent` symbolic math answered in ≈0.6 s including the tool call.
 
+## Stage 5 — retrieval quality
+
+The retriever (`helix/retrieval.py`) is deliberately plain: stopword-filtered token
+overlap scored with BM25, blended 65/35 with a hashed bag-of-words cosine signal. No
+embedding service, no network, so it can be measured and reviewed.
+
+Measured with `scripts/eval_retrieval.py` on a hand-labelled set of 12 questions over the
+repository's own documentation (11 documents, the `docs/measurements/` reports excluded, `k = 4`):
+
+| Metric | Value |
+| --- | --- |
+| recall@1 | 0.75 (9/12) |
+| recall@4 | 0.83 (10/12) |
+| MRR | 0.771 |
+| Citations resolving to a real file and a valid character range | 12/12 |
+| Misses | *"how do I reproduce the training runs on a CPU"* (not in top 4) and *"where should runtime artifacts be stored"* (not in top 4) |
+
+The caveat is part of the result: the questions were written after the documents, so they
+share vocabulary with them; three cases accept more than one document because the fact
+genuinely appears in several places. This is indicative of whether citation plumbing and
+ranking work, not a semantic-search benchmark. Regenerate with:
+
+```sh
+python scripts/eval_retrieval.py --out docs/measurements/retrieval-eval.json
+```
+
+`tests/test_measurements.py` recomputes these numbers and fails if the committed report
+drifts from the current documentation.
+
 ## Fortran kernels
 
 `helix/native/kernels.f90` is compiled with `f2py` when a Fortran toolchain is present,

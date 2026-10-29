@@ -118,3 +118,20 @@ def test_chunk_split_and_tokenizer_helpers():
     assert all(end > start for start, end in spans)
     assert spans[-1][1] == len(text)
     assert _tokens('The Attention MASK, and the model!') == ['attention', 'mask', 'model']
+
+
+def test_ingest_can_exclude_relative_directories(tmp_path):
+    from helix.retrieval import RetrievalIndex
+
+    (tmp_path / 'keep.md').write_text('# Kept\n\nhelium balloon pressure valve calibration notes.\n', encoding='utf-8')
+    reports = tmp_path / 'reports'
+    reports.mkdir()
+    (reports / 'ignored.md').write_text('# Ignored\n\nhelium balloon pressure valve calibration notes.\n', encoding='utf-8')
+
+    everything = RetrievalIndex.ingest(tmp_path)
+    filtered = RetrievalIndex.ingest(tmp_path, exclude=['reports'])
+    assert everything.document_count == 2
+    assert filtered.document_count == 1
+    assert all(not chunk.source.startswith('reports/') for chunk in filtered.chunks)
+    # Exclusion must not disturb the kept document's checksum stability.
+    assert filtered.search('helium balloon calibration')
