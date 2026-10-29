@@ -250,3 +250,31 @@ def test_status_never_claims_unimplemented_capabilities(client):
     assert caps['web_search'] is False
     assert caps['training_jobs'] is False
     assert isinstance(caps['retrieval'], bool)
+
+
+def test_client_disconnect_releases_the_compute_lock(tmp_path, monkeypatch):
+    """A browser that stops mid-stream must not wedge the single compute slot."""
+
+    def fake_llm(self, config, checkpoint):
+        return object(), object(), SimpleNamespace(train=SimpleNamespace(device='cpu'))
+
+    def endless_stream(*args, **kwargs):
+        for index in range(200):
+            yield f'token{index} '
+
+    monkeypatch.setattr(web.ModelCache, 'llm', fake_llm)
+    monkeypatch.setattr(infer, 'stream_generate', endless_stream)
+    client = _ready_app(tmp_path, monkeypatch).test_client()
+
+    response = client.post('/api/chat/stream', json={'message': 'long answer please'}, buffered=False)
+    assert response.status_code == 200
+    iterator = iter(response.response)
+    first = next(iterator)
+    assert b'meta' in first or b'delta' in first
+    iterator.close()          # the client disconnects here
+    response.close()
+
+    # The lock must be free: a new request is served instead of a 429.
+    second = client.post('/api/chat/stream', json={'message': 'again'}, buffered=True)
+    assert second.status_code == 200, second.get_data(as_text=True)
+    assert '"done": true' in second.get_data(as_text=True)

@@ -1,0 +1,48 @@
+{
+  "model": {
+    "vocab_size": 512,
+    "block_size": 128,
+    "n_layer": 3,
+    "n_head": 4,
+    "n_embd": 128,
+    "n_kv_head": 2,
+    "dropout": 0.1,
+    "bias": false,
+    "eps": 1e-05,
+    "rope_base": 10000.0,
+    "weight_tying": true,
+    "grad_checkpoint": false,
+    "block_type": "transformer"
+  },
+  "train": {
+    "batch_size": 6,
+    "block_size": 128,
+    "max_iters": 60,
+    "eval_interval": 25,
+    "eval_iters": 10,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.05,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "gradient_accumulation_steps": 1,
+    "lr_decay_iters": 200,
+    "min_lr": 6e-05,
+    "warmup_iters": 20,
+    "seed": 1337,
+    "device": "cpu",
+    "dtype": "float32",
+    "log_interval": 50,
+    "save_interval": 0,
+    "out_dir": "sft",
+    "resume_from": null
+  },
+  "data": {
+    "train_file": "data/train.npy",
+    "val_file": "data/val.npy",
+    "vocab_file": "data/vocab.json",
+    "merges_file": "data/merges.json",
+    "corpus_file": "corpus.txt",
+    "train_frac": 0.9
+  }
+}
