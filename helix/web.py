@@ -1,8 +1,18 @@
-"""Local integrated HELIX application. No paid APIs or pretrained models.
+"""HELIX application server: versioned JSON API plus the Beta by helix client.
 
 The bundled models are small research prototypes, not production assistants.
 Code execution is explicitly approved and fails closed without Linux isolation.
-The server has no authentication: bind to loopback except in trusted previews.
+Authentication is opt-in via HELIX_REQUIRE_AUTH; the deployment blueprint and
+the Vercel proxy both enable it, so browser traffic never holds the credentials.
+
+Reliability rules enforced here:
+  * every /api/* response is JSON (or server-sent events / PNG), including
+    errors raised by Flask itself;
+  * every response carries a request id that also appears in one structured
+    access-log line;
+  * expensive or abusable endpoints are rate limited per client;
+  * model and bundle failures return an accurate, actionable 503 instead of an
+    unhandled exception, and never leak absolute filesystem paths.
 """
 from __future__ import annotations
 import hashlib
@@ -19,10 +29,14 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlsplit
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, g, jsonify, request, send_from_directory
+from werkzeug.exceptions import HTTPException
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from helix import __version__ as HELIX_VERSION
 from helix.memory import MemoryStore
+from helix.observability import (AccessLogger, RateLimiter, env_flag, env_int,
+                                 valid_request_id)
 from helix.storage import REPOSITORY_ROOT, resolve_data_root
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +44,38 @@ APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 # while checkpoints and outputs always remain separate under HELIX_DATA_ROOT.
 PROJECT_ROOT = os.path.dirname(APP_ROOT)
 RESOLVED_PROJECT_ROOT = os.path.abspath(PROJECT_ROOT)
+# The single source of truth for the web client: Vercel serves this directory
+# statically and Flask serves the same bytes, so the two can never drift.
+PUBLIC_ROOT = os.path.join(RESOLVED_PROJECT_ROOT, 'public')
+PUBLIC_STATIC = os.path.join(PUBLIC_ROOT, 'static')
+PUBLIC_INDEX = os.path.join(PUBLIC_ROOT, 'index.html')
+
+
+class ApiVersionMiddleware:
+    """Accept /api/v1/... as an alias of /api/... without duplicating routes."""
+
+    def __init__(self, app, prefix: str = '/api/v1'):
+        self.app = app
+        self.prefix = prefix
+
+    def __call__(self, environ, start_response):
+        path = environ.get('PATH_INFO', '')
+        if path == self.prefix or path.startswith(self.prefix + '/'):
+            environ['PATH_INFO'] = '/api' + path[len(self.prefix):]
+            environ['helix.api_version'] = '1'
+        return self.app(environ, start_response)
+
+
+def _now_iso() -> str:
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+def _sanitize_exception(exc: BaseException) -> str:
+    """Describe a failure without revealing absolute paths or secrets."""
+    text = f'{type(exc).__name__}: {exc}'
+    text = re.sub(r'(?<!\w)/(?:[\w.\-]+/)+[\w.\-]+', '<path>', text)
+    text = re.sub(r'(?i)(password|token|secret|authorization)\s*[=:]\s*\S+', r'\1=<redacted>', text)
+    return text[:300]
 
 
 def _path(value: str) -> str:
@@ -134,13 +180,18 @@ def create_app(config_path: str = 'configs/helix-research.json',
                vision_config: Optional[str] = None,
                vision_checkpoint: Optional[str] = None,
                caption_dir: Optional[str] = None,
-               external_origin: Optional[str] = None) -> Flask:
+               external_origin: Optional[str] = None,
+               startup_error: Optional[str] = None,
+               build_sha: Optional[str] = None,
+               retrieval_root: Optional[str] = None,
+               started_at: Optional[float] = None) -> Flask:
     public_origin = _origin_parts(external_origin) if external_origin is not None else None
     if external_origin is not None and public_origin is None:
         raise ValueError('external_origin must be an HTTP(S) origin without a path or credentials')
     if vision_config is not None:
         raise ValueError('vision_config is not used by the synthetic classifier; use caption_dir for the captioner')
-    app = Flask(__name__, static_folder='static', static_url_path='/static')
+    app = Flask(__name__, static_folder=PUBLIC_STATIC, static_url_path='/static')
+    app.wsgi_app = ApiVersionMiddleware(app.wsgi_app)
     require_auth = os.getenv('HELIX_REQUIRE_AUTH', '').strip().lower() in ('1', 'true', 'yes', 'on')
     auth_username = os.getenv('HELIX_AUTH_USERNAME', '')
     auth_password = os.getenv('HELIX_AUTH_PASSWORD', '')
@@ -167,6 +218,43 @@ def create_app(config_path: str = 'configs/helix-research.json',
     compute = threading.Lock()
     audit_lock = threading.Lock()
 
+    access_log = AccessLogger()
+    general_limiter = RateLimiter(env_int('HELIX_RATE_LIMIT_PER_MINUTE', 120, 0, 100_000),
+                                  env_int('HELIX_RATE_LIMIT_BURST', 30, 1, 10_000))
+    chat_limiter = RateLimiter(env_int('HELIX_CHAT_RATE_LIMIT_PER_MINUTE', 15, 0, 10_000),
+                               env_int('HELIX_CHAT_RATE_LIMIT_BURST', 4, 1, 1_000))
+    boot_time = started_at if started_at is not None else time.time()
+    build = (build_sha or os.getenv('HELIX_BUILD_SHA') or os.getenv('RENDER_GIT_COMMIT')
+             or os.getenv('VERCEL_GIT_COMMIT_SHA') or 'unknown')
+    startup_failure = startup_error
+    retrieval_dir = retrieval_root or os.getenv('HELIX_RETRIEVAL_ROOT') or ''
+    api_metrics = {'requests': 0, 'errors': 0, 'chats': 0, 'chat_failures': 0}
+
+    def client_key() -> str:
+        # Render terminates TLS and sets X-Forwarded-For; the deployment also
+        # requires Basic Auth, so a spoofed header only affects the attacker.
+        forwarded = request.headers.get('X-Forwarded-For', '')
+        if forwarded:
+            return forwarded.split(',')[0].strip()[:64] or 'unknown'
+        return (request.remote_addr or 'unknown')[:64]
+
+    def api_error(message: str, status: int, code: str, **extra):
+        payload = {'error': message, 'code': code, 'layer': 'helix-backend',
+                   'request_id': getattr(g, 'request_id', None)}
+        payload.update({k: v for k, v in extra.items() if v is not None})
+        response = jsonify(payload)
+        response.status_code = status
+        g.error_code = code
+        return response
+
+    def model_files():
+        return {
+            'llm': os.path.isfile(config_path) and os.path.isfile(llm_checkpoint),
+            'image_gen': os.path.isfile(image_config) and os.path.isfile(image_checkpoint),
+            'vision': os.path.isfile(vision_checkpoint),
+            'caption': os.path.isfile(os.path.join(caption_dir, 'ckpt-best.pt')),
+        }
+
     def audit(action, ok, content=''):
         # Do not log prompts, memory, code, environment or uploaded bytes.
         event = {'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
@@ -181,7 +269,9 @@ def create_app(config_path: str = 'configs/helix-research.json',
     def save_image(image):
         filename = uuid.uuid4().hex + '.png'
         image.save(image_root / filename, format='PNG')
-        return '/out/web_images/' + filename
+        # The /api prefix keeps generated images behind the authenticated Vercel
+        # proxy; the legacy /out/... path is still served for old links.
+        return '/api/out/web_images/' + filename
 
     def chat_prompt(body):
         message = body.get('message', '')
@@ -201,6 +291,25 @@ def create_app(config_path: str = 'configs/helix-research.json',
                 context.append(item['role'].capitalize() + ': ' + item['text'][:400])
         instruction = ('\n'.join(context) + '\nUser: ' if context else '') + message.strip()
         return f'INSTRUCTION: {instruction}\nRESPONSE: ', message
+
+    @app.before_request
+    def start_request():
+        g.request_id = valid_request_id(request.headers.get('X-Request-ID')) or uuid.uuid4().hex
+        g.started_monotonic = time.monotonic()
+        g.error_code = None
+        api_metrics['requests'] += 1
+        path = request.path
+        if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and path.startswith('/api/'):
+            limiter = chat_limiter if path.startswith('/api/chat') else general_limiter
+            if limiter.per_minute > 0:
+                allowed, retry_after = limiter.check(client_key())
+                if not allowed:
+                    wait = max(1, int(round(retry_after)))
+                    response = api_error('Too many requests. Slow down and retry.', 429,
+                                         'rate_limited', retry_after_s=wait)
+                    response.headers['Retry-After'] = str(wait)
+                    return response
+        return None
 
     @app.before_request
     def require_basic_auth():
@@ -238,88 +347,301 @@ def create_app(config_path: str = 'configs/helix-research.json',
 
     @app.after_request
     def headers(response):
+        request_id = getattr(g, 'request_id', None) or uuid.uuid4().hex
+        response.headers['X-Request-ID'] = request_id
+        response.headers['X-API-Version'] = '1'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
-        if request.path.startswith('/api/'):
-            response.headers['Cache-Control'] = 'no-store'
-        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'"
+        is_api = request.path.startswith('/api/')
+        if is_api:
+            response.headers['Cache-Control'] = 'no-store, max-age=0'
+        if response.mimetype == 'text/event-stream':
+            response.headers['Cache-Control'] = 'no-cache, no-transform'
+            response.headers['X-Accel-Buffering'] = 'no'
+            response.headers['Connection'] = 'keep-alive'
+        # Hard guarantee: the browser is never handed an HTML page for an API
+        # path, even if an unexpected error escaped the JSON error handlers.
+        if is_api and response.mimetype not in ('application/json', 'text/event-stream', 'image/png') \
+                and response.status_code >= 400:
+            response.set_data(json.dumps({'error': 'The HELIX backend produced an unexpected response.',
+                                          'code': 'internal_non_json_response', 'layer': 'helix-backend',
+                                          'request_id': request_id}))
+            response.mimetype = 'application/json'
+            if not g.error_code:
+                g.error_code = 'internal_non_json_response'
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; "
+            "script-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'")
+        elapsed_ms = int((time.monotonic() - getattr(g, 'started_monotonic', time.monotonic())) * 1000)
+        if response.status_code >= 500:
+            api_metrics['errors'] += 1
+        access_log.log(request_id=request_id, method=request.method,
+                       route=(request.url_rule.rule if request.url_rule is not None else request.path),
+                       status=response.status_code, duration_ms=elapsed_ms,
+                       error_code=getattr(g, 'error_code', None),
+                       api_version=request.environ.get('helix.api_version', '1'),
+                       client=hashlib.sha256(client_key().encode('utf-8')).hexdigest()[:12])
         return response
+
+    @app.errorhandler(HTTPException)
+    def http_error(exc: HTTPException):
+        if not request.path.startswith('/api/'):
+            return exc
+        codes = {400: 'bad_request', 401: 'unauthorized', 403: 'forbidden', 404: 'route_not_found',
+                 405: 'method_not_allowed', 413: 'request_too_large', 415: 'unsupported_media_type',
+                 429: 'rate_limited'}
+        return api_error(exc.description or exc.name, exc.code or 500,
+                         codes.get(exc.code or 500, 'http_error'))
+
+    @app.errorhandler(Exception)
+    def unhandled(exc: Exception):
+        # Log a sanitized description server side; never expose a traceback,
+        # absolute path or environment value to the caller.
+        access_log.log(request_id=getattr(g, 'request_id', None), event='unhandled_exception',
+                       error=_sanitize_exception(exc))
+        return api_error('The HELIX backend hit an internal error while handling this request.',
+                         500, 'internal_error', detail=_sanitize_exception(exc) if app.debug else None)
 
     @app.errorhandler(413)
     def too_large(_exc):
         return jsonify({'error': 'request exceeds 6 MiB'}), 413
 
+    def readiness() -> dict:
+        files = model_files()
+        ready = bool(files['llm']) and startup_failure is None
+        return {
+            'ok': ready,
+            'status': 'ready' if ready else 'degraded',
+            'service': 'helix-chat',
+            'version': HELIX_VERSION,
+            'api_version': '1',
+            'build': build,
+            'uptime_s': int(time.time() - boot_time),
+            'model_ready': ready,
+            'degraded': not ready,
+            'degraded_reason': None if ready else (startup_failure or 'language model artifacts are not present'),
+            'models': files,
+        }
+
     @app.get('/healthz')
     def healthz():
-        return jsonify({'ok': True, 'service': 'helix-chat'})
+        # Liveness only: Render must keep the process routable so the JSON
+        # diagnostics below stay reachable while a bundle is repaired. Readiness
+        # is reported honestly by /api/health.
+        return jsonify({**readiness(), 'liveness': True})
 
     @app.get('/')
     def index():
-        return send_from_directory(app.static_folder, 'index.html')
+        response = send_from_directory(os.path.dirname(PUBLIC_INDEX), 'index.html')
+        response.headers['Cache-Control'] = 'no-cache'
+        return response
+
+    @app.get('/favicon.svg')
+    def favicon():
+        return send_from_directory(os.path.dirname(PUBLIC_INDEX), 'favicon.svg', mimetype='image/svg+xml')
+
+    @app.get('/api/health')
+    def api_health():
+        return jsonify(readiness())
+
+    @app.get('/api/version')
+    def api_version():
+        return jsonify({'service': 'helix-chat', 'version': HELIX_VERSION,
+                        'api_version': '1', 'build': build,
+                        'started_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(boot_time))})
 
     @app.get('/api/status')
     def status():
+        files = model_files()
+        retrieval = None
+        try:
+            from helix.retrieval import RetrievalIndex
+            if retrieval_dir:
+                index = RetrievalIndex.load(retrieval_dir)
+                retrieval = {'configured': True, 'documents': index.document_count,
+                             'chunks': index.chunk_count, 'kind': 'local-document-index'}
+            else:
+                retrieval = {'configured': False, 'documents': 0, 'chunks': 0,
+                             'kind': 'local-document-index',
+                             'hint': 'Set HELIX_RETRIEVAL_ROOT to a directory of .md/.txt/.html files to enable source-grounded answers.'}
+        except Exception:
+            retrieval = {'configured': False, 'documents': 0, 'chunks': 0, 'kind': 'local-document-index'}
         return jsonify({'ok': True, 'device': 'cpu',
-                        'models': {'llm': os.path.isfile(config_path) and os.path.isfile(llm_checkpoint),
-                                   'image_gen': os.path.isfile(image_config) and os.path.isfile(image_checkpoint),
-                                   'vision': os.path.isfile(vision_checkpoint),
-                                   'caption': os.path.isfile(os.path.join(caption_dir, 'ckpt-best.pt'))},
+                        'version': HELIX_VERSION, 'build': build, 'request_id': g.request_id,
+                        'models': files,
                         'loaded': {'llm': models._llm is not None, 'image_gen': models._image is not None,
                                    'vision': models._vision is not None, 'caption': models._caption is not None},
-                        'limitations': 'Small experimental models. No general-purpose accuracy or photorealism claim.'})
+                        'capabilities': {'chat': True, 'streaming': True, 'images': files['image_gen'],
+                                         'image_analysis': files['vision'] or files['caption'],
+                                         'code_analysis': True, 'code_execution': True,
+                                         'symbolic_math': True, 'csv_statistics': True,
+                                         'retrieval': retrieval['configured'],
+                                         'web_search': False, 'training_jobs': False},
+                        'retrieval': retrieval,
+                        'limitations': ('Small experimental models trained from random initialization on a '
+                                        'small documented corpus. No general-purpose accuracy, live web access '
+                                        'or photorealism claim.')})
+
+    @app.get('/api/diagnostics')
+    def diagnostics():
+        # Presence flags only - never values. Requires the deployment's Basic
+        # Auth because HELIX_REQUIRE_AUTH is set in the production blueprint.
+        files = model_files()
+        storage_ok = os.access(runtime_root, os.W_OK)
+        env_presence = {name: bool(os.getenv(name)) for name in (
+            'HELIX_REQUIRE_AUTH', 'HELIX_AUTH_USERNAME', 'HELIX_AUTH_PASSWORD',
+            'HELIX_MODEL_BUNDLE_URL', 'HELIX_MODEL_BUNDLE_SHA256', 'HELIX_DATA_ROOT',
+            'HELIX_RETRIEVAL_ROOT', 'RENDER_GIT_COMMIT', 'HELIX_BUILD_SHA')}
+        return jsonify({
+            'service': 'helix-chat', 'version': HELIX_VERSION, 'build': build,
+            'request_id': g.request_id, 'uptime_s': int(time.time() - boot_time),
+            'startup_error': startup_failure,
+            'models': files,
+            'model_files': {name: {'present': present,
+                                   'bytes': (os.path.getsize(path) if present and os.path.isfile(path) else None)}
+                            for name, present, path in (
+                                ('checkpoint', files['llm'], llm_checkpoint),
+                                ('config', os.path.isfile(config_path), config_path),
+                                ('image_config', os.path.isfile(image_config), image_config),
+                                ('image_checkpoint', os.path.isfile(image_checkpoint), image_checkpoint),
+                                ('vision_checkpoint', os.path.isfile(vision_checkpoint), vision_checkpoint))},
+            'storage_writable': storage_ok,
+            'environment_present': env_presence,
+            'rate_limits': {'general_per_minute': general_limiter.per_minute,
+                            'chat_per_minute': chat_limiter.per_minute,
+                            'scope': 'per-process token bucket keyed by client address'},
+            'counters': dict(api_metrics),
+            'proxy_contract': {'json_only': True, 'sse': True, 'max_body_bytes': 4 * 1024 * 1024},
+        })
 
     def start_chat(body, streaming):
+        unavailable = startup_failure or (None if model_files()['llm'] else 'language model artifacts are missing')
+        if unavailable:
+            return api_error('The language model is not available on this deployment.',
+                             503, 'model_unavailable',
+                             detail=f'{unavailable}. See /api/diagnostics for artifact state.',
+                             retryable=False)
         try:
             prompt, message = chat_prompt(body)
             limit = int(body.get('max_new_tokens', 80))
-            if not 1 <= limit <= 160: raise ValueError('max_new_tokens must be 1..160')
+            if not 1 <= limit <= 160:
+                raise ValueError('max_new_tokens must be 1..160')
+            use_sources = body.get('use_sources') is not False
         except (ValueError, TypeError) as exc:
-            return jsonify({'error': str(exc)}), 400
+            return api_error(str(exc), 400, 'invalid_request')
+        sources, evidence = [], ''
+        if use_sources and retrieval_dir:
+            try:
+                from helix.retrieval import RetrievalIndex
+                index = RetrievalIndex.load(retrieval_dir)
+                sources = [chunk.to_dict() for chunk in index.search(message, k=4)]
+                if sources:
+                    evidence = index.build_evidence(sources)
+            except Exception as exc:
+                access_log.log(request_id=g.request_id, event='retrieval_failed',
+                               error=_sanitize_exception(exc))
+                sources = []
+        if evidence:
+            prompt = ('SOURCES (retrieved from the local HELIX document index; cite as [n]):\n'
+                      + evidence + '\n\n' + prompt)
         if not compute.acquire(blocking=False):
-            return jsonify({'error': 'another compute task is running; try again'}), 429
+            return api_error('Another compute task is running. Retry in a moment.', 429,
+                             'compute_busy', retry_after_s=2, retryable=True)
         try:
             model, tok, cfg = models.llm(config_path, llm_checkpoint)
         except Exception as exc:
             compute.release()
             audit('chat', False, message)
-            return jsonify({'error': f'language checkpoint unavailable: {exc}'}), 503
+            api_metrics['chat_failures'] += 1
+            access_log.log(request_id=g.request_id, event='model_load_failed',
+                           error=_sanitize_exception(exc))
+            return api_error('The language model could not be loaded for this request.',
+                             503, 'model_load_failed',
+                             detail='Checkpoint or tokenizer failed to load. See /api/diagnostics.',
+                             retryable=False)
         from helix.infer import stream_generate
-        if streaming:
-            def events():
+        api_metrics['chats'] += 1
+        meta = {'request_id': g.request_id, 'model': 'helix-sft-experimental',
+                'max_new_tokens': limit, 'temperature': 0.7, 'top_k': 40,
+                'streaming': bool(streaming), 'sources': sources,
+                'grounded_in_local_documents': bool(sources),
+                'notice': 'Experimental model output trained from random initialization; verify independently.'}
+
+        # The request context is gone once the response starts streaming, so
+        # capture everything the generator needs up front.
+        req_id = g.request_id
+
+        class EventStream:
+            """SSE body that releases the compute lock on completion or disconnect."""
+
+            def __init__(self):
+                self.released = False
+
+            def release(self):
+                if not self.released:
+                    self.released = True
+                    compute.release()
+
+            def __call__(self):
                 try:
+                    yield 'data: ' + json.dumps({'meta': meta}, ensure_ascii=False) + '\n\n'
                     for chunk in stream_generate(model, tok, prompt, limit, temperature=.7,
                                                  top_k=40, device=cfg.train.device):
                         yield 'data: ' + json.dumps({'delta': chunk}, ensure_ascii=False) + '\n\n'
                     audit('chat', True, message)
-                    yield 'data: {"done":true}\n\n'
+                    yield 'data: ' + json.dumps({'done': True, 'request_id': req_id}) + '\n\n'
+                except GeneratorExit:
+                    # The client disconnected (browser stop, proxy cancel).
+                    audit('chat_cancelled', False, message)
+                    raise
                 except Exception as exc:
                     audit('chat', False, message)
-                    yield 'data: ' + json.dumps({'error': str(exc)}) + '\n\n'
+                    api_metrics['chat_failures'] += 1
+                    access_log.log(request_id=req_id, event='generation_failed',
+                                   error=_sanitize_exception(exc))
+                    yield 'data: ' + json.dumps({'error': 'Generation failed on the backend.',
+                                                 'code': 'generation_failed',
+                                                 'request_id': req_id}) + '\n\n'
                 finally:
-                    compute.release()
-            return Response(events(), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+                    self.release()
+
+        if streaming:
+            events = EventStream()
+            return Response(events(), mimetype='text/event-stream',
+                            headers={'Cache-Control': 'no-cache, no-transform',
+                                     'X-Accel-Buffering': 'no',
+                                     'Connection': 'keep-alive',
+                                     'X-Request-ID': req_id})
         try:
             reply = ''.join(stream_generate(model, tok, prompt, limit, temperature=.7, top_k=40,
                                             device=cfg.train.device))
             audit('chat', True, message)
-            return jsonify({'reply': reply, 'verified': False,
-                            'notice': 'Prototype language-model output; verify independently.'})
+            return jsonify({'reply': reply, 'verified': False, 'sources': sources,
+                            'request_id': g.request_id,
+                            'notice': meta['notice']})
         except Exception as exc:
             audit('chat', False, message)
-            return jsonify({'error': str(exc)}), 500
+            api_metrics['chat_failures'] += 1
+            access_log.log(request_id=g.request_id, event='generation_failed',
+                           error=_sanitize_exception(exc))
+            return api_error('Generation failed on the backend.', 500, 'generation_failed')
         finally:
             compute.release()
 
     @app.post('/api/chat')
     def chat_route():
-        try: return start_chat(_json_body(), False)
-        except ValueError as exc: return jsonify({'error': str(exc)}), 400
+        try:
+            return start_chat(_json_body(), False)
+        except ValueError as exc:
+            return api_error(str(exc), 400, 'invalid_json')
 
     @app.post('/api/chat/stream')
     def chat_stream():
-        try: return start_chat(_json_body(), True)
-        except ValueError as exc: return jsonify({'error': str(exc)}), 400
+        try:
+            return start_chat(_json_body(), True)
+        except ValueError as exc:
+            return api_error(str(exc), 400, 'invalid_json')
 
     @app.route('/api/memory', methods=['GET', 'POST', 'DELETE'])
     def memory_route():
@@ -605,10 +927,66 @@ def create_app(config_path: str = 'configs/helix-research.json',
                     except (OSError, ValueError): continue
         return jsonify({'experiments': entries})
 
+    def _retrieval_index():
+        if not retrieval_dir:
+            return None
+        from helix.retrieval import RetrievalIndex
+        return RetrievalIndex.load(retrieval_dir)
+
+    @app.post('/api/research/search')
+    def research_search():
+        try:
+            body = _json_body()
+            query = body.get('query', '')
+            if not isinstance(query, str) or not 1 <= len(query.strip()) <= 1000:
+                raise ValueError('query must contain 1..1000 characters')
+            k = int(body.get('k', 4))
+            if not 1 <= k <= 20:
+                raise ValueError('k must be 1..20')
+        except (ValueError, TypeError) as exc:
+            return api_error(str(exc), 400, 'invalid_request')
+        try:
+            index = _retrieval_index()
+        except (OSError, ValueError) as exc:
+            access_log.log(request_id=g.request_id, event='retrieval_index_failed',
+                           error=_sanitize_exception(exc))
+            return api_error('The local document index could not be loaded.', 503,
+                             'retrieval_unavailable', retryable=False)
+        if index is None:
+            return api_error('No local document index is configured on this deployment.', 503,
+                             'retrieval_not_configured',
+                             detail='Set HELIX_RETRIEVAL_ROOT to rebuild or mount a document index.',
+                             retryable=False)
+        results = [chunk.to_dict() for chunk in index.search(query, k=k)]
+        audit('research_search', True, query)
+        return jsonify({'query': query, 'results': results, 'request_id': g.request_id,
+                        'index': {'documents': index.document_count, 'chunks': index.chunk_count,
+                                  'checksum': index.checksum},
+                        'notice': ('Retrieved from the local HELIX document index. Ranking is lexical '
+                                   '(BM25) plus hashed bag-of-words similarity, not a semantic model. '
+                                   'Web search is not performed.')})
+
+    @app.get('/api/research/sources')
+    def research_sources():
+        try:
+            index = _retrieval_index()
+        except (OSError, ValueError):
+            index = None
+        if index is None:
+            return jsonify({'configured': False, 'documents': [], 'request_id': g.request_id})
+        return jsonify({'configured': True, 'request_id': g.request_id,
+                        'documents': index.documents,
+                        'index': {'documents': index.document_count, 'chunks': index.chunk_count,
+                                  'checksum': index.checksum}})
+
     @app.get('/out/web_images/<name>')
+    @app.get('/api/out/web_images/<name>')
     def web_image(name):
-        if not re.fullmatch(r'[0-9a-f]{32}\.png', name): return 'not found', 404
-        return send_from_directory(image_root, name, mimetype='image/png')
+        if not re.fullmatch(r'[0-9a-f]{32}\.png', name):
+            return api_error('Unknown image.', 404, 'image_not_found')
+        response = send_from_directory(image_root, name, mimetype='image/png')
+        response.headers['Cache-Control'] = 'private, max-age=300'
+        return response
 
     return app
 

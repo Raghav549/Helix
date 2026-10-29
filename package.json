@@ -1,6 +1,13 @@
 {
   "name": "helix-web",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Static HELIX interface with a server-side authenticated API proxy"
+  "description": "Beta by helix web client, server-side authenticated API proxy and deployment smoke tests",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test tests/node/proxy.test.cjs",
+    "smoke": "node scripts/smoke_deploy.mjs"
+  }
 }

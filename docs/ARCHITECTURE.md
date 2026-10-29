@@ -63,7 +63,7 @@ records; `math_worker.py` runs validated SymPy operations in a resource-limited
 child process. The math worker is not the Python execution sandbox. SymPy is an
 independent computation tool, not a proof of correctness for every expression.
 
-`web.py` serves `helix/static/` and relative JSON/SSE endpoints with lazy loading,
+`web.py` serves `public/` and relative JSON/SSE endpoints with lazy loading,
 bounded requests, same-origin checks and metadata-only web audit events. An
 explicit `--external-origin` supports trusted TLS-terminating proxies that do
 not forward the browser scheme; it is an exact origin, not authentication. The
