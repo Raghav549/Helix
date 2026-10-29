@@ -331,11 +331,18 @@ export function ChatScreen() {
 
   const onQuickAction = useCallback(
     (action: QuickAction) => {
-      if (action.id === 'image') {
+      if (action.id === 'image' || action.id === 'analyze') {
         void analyzeImage();
         return;
       }
-      setToolsEnabled(action.id === 'math');
+      if (action.id === 'code') {
+        setToolsEnabled(true);
+        return;
+      }
+      if (action.id === 'more') {
+        setSettingsOpen(true);
+        return;
+      }
       setInput(quickActionPrompt(action.id));
     },
     [analyzeImage],
@@ -413,8 +420,8 @@ export function ChatScreen() {
           <View style={[styles.menuLine, { backgroundColor: theme.palette.ink, width: 14 }]} />
         </Pressable>
         <Wordmark compact />
-        <Pressable onPress={newChat} accessibilityRole="button" accessibilityLabel="New chat" style={styles.menu} hitSlop={8}>
-          <Text style={[styles.newGlyph, { color: theme.palette.ink }]}>＋</Text>
+        <Pressable onPress={() => setSettingsOpen(true)} accessibilityRole="button" accessibilityLabel="Open settings" style={styles.menu} hitSlop={8}>
+          <Text style={[styles.newGlyph, { color: theme.palette.ink }]}>⚙</Text>
         </Pressable>
       </View>
 
@@ -428,10 +435,11 @@ export function ChatScreen() {
           )}
           ListHeaderComponent={
             <View style={styles.intro}>
-              <Text style={[styles.greeting, { color: theme.palette.ink }]} accessibilityRole="header">{greeting}</Text>
-              <Text style={[styles.sub, { color: theme.palette.muted }]}>
-                Ask a question, or start with a task. Every card below runs a real HELIX endpoint.
+              <Text style={[styles.greeting, { color: theme.palette.ink }]} accessibilityRole="header">
+                Good morning,{' '}
+                <Text style={{ color: theme.palette.pink, fontWeight: '800' }}>Raghav</Text>
               </Text>
+              <Text style={[styles.sub, { color: theme.palette.muted }]}>How can I help you today?</Text>
               <QuickActions onSelect={onQuickAction} disabled={busy} />
               {healthChecked && (
                 <View style={[styles.health, { borderColor: theme.palette.line, backgroundColor: theme.palette.paperSoft }]}>

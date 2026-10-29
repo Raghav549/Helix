@@ -35,7 +35,7 @@ export function formatAnalysis(payload: Record<string, unknown> | null, fileName
 }
 
 /** Messages the app can send for a quick action, kept honest about what runs. */
-export function quickActionPrompt(id: 'image' | 'summarize' | 'code' | 'brainstorm' | 'math'): string {
+export function quickActionPrompt(id: 'image' | 'summarize' | 'code' | 'brainstorm' | 'analyze' | 'more'): string {
   switch (id) {
     case 'summarize':
       return 'Summarize the following text in five bullet points:\n\n';
@@ -43,8 +43,10 @@ export function quickActionPrompt(id: 'image' | 'summarize' | 'code' | 'brainsto
       return 'Write a Python function that ';
     case 'brainstorm':
       return 'Give me five distinct ideas for ';
-    case 'math':
-      return 'Differentiate x**3 + 2*x with respect to x';
+    case 'analyze':
+      return 'Analyze the attached image and describe what you see.';
+    case 'more':
+      return '';
     case 'image':
     default:
       return '';

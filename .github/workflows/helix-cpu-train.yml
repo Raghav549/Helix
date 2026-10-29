@@ -12,14 +12,12 @@ on:
       - 'scripts/prepare_corpus.py'
       - 'scripts/package_model_bundle.py'
       - 'scripts/generate_sft_pairs.py'
-      - 'tests/test_train.py'
+      - 'tests/test_train_smoke.py'
       - 'tests/test_sft.py'
       - 'tests/test_generate_sft_pairs.py'
-      - 'tests/test_data.py'
+      - 'tests/test_data_integrity.py'
       - 'tests/test_tokenizer.py'
       - 'tests/test_model.py'
-      - 'tests/test_infer.py'
-      - 'tests/test_config.py'
   workflow_dispatch:
     inputs:
       train_steps:
