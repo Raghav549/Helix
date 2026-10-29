@@ -34,6 +34,12 @@ class ModelConfig:
     block_type: str = "transformer"  # transformer | linear_attn | recurrent |
                                      # "transformer,linear_attn" for hybrid (cycled)
 
+    # Long-context extensions (all optional; defaults preserve original behavior)
+    window_size: Optional[int] = None          # sliding-window attention (None = full)
+    rope_scaling: str = "none"                 # 'none' | 'linear' | 'ntk'
+    ntk_alpha: float = 1.0                     # NTK scaling factor
+    max_position_embeddings: Optional[int] = None  # RoPE table length (default block_size)
+
     def __post_init__(self) -> None:
         if min(self.vocab_size, self.block_size, self.n_layer, self.n_head,
                self.n_embd, self.n_kv_head) <= 0:
@@ -48,6 +54,16 @@ class ModelConfig:
         types = {t.strip() for t in self.block_type.split(",")}
         if not types or not types <= allowed:
             raise ValueError(f"block_type must use {allowed}, got {self.block_type!r}")
+        if self.rope_scaling not in ("none", "linear", "ntk"):
+            raise ValueError(f"rope_scaling must be 'none'|'linear'|'ntk', got {self.rope_scaling!r}")
+        if self.window_size is not None and self.window_size < 1:
+            raise ValueError("window_size must be a positive int or None")
+        if self.ntk_alpha < 1.0:
+            raise ValueError("ntk_alpha must be >= 1.0")
+        if self.max_position_embeddings is None:
+            self.max_position_embeddings = self.block_size
+        if self.max_position_embeddings < self.block_size:
+            raise ValueError("max_position_embeddings must be >= block_size")
 
 
 @dataclass

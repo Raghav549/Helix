@@ -1084,7 +1084,8 @@ def create_app(config_path: str = 'configs/helix-research.json',
 
         from helix.orchestrator import Orchestrator
         from helix.research import run_bounded_math
-        from helix.numerics import linear_forecast
+        from helix.numerics import (linear_forecast, ar_predict, mlr_fit, mlr_predict,
+                                    poly_fit, poly_predict, correlation)
         from helix.sandbox import run_python
 
         def symbolic_tool(arguments):
@@ -1094,6 +1095,25 @@ def create_app(config_path: str = 'configs/helix-research.json',
 
         def forecast_tool(arguments):
             return linear_forecast(arguments['series'], horizon=arguments.get('horizon', horizon))
+
+        def ar_forecast_tool(arguments):
+            series = arguments.get('series', [])
+            p = int(arguments.get('p', 2))
+            steps = int(arguments.get('steps', horizon))
+            return ar_predict(series, p, steps)
+
+        def multiple_regression_tool(arguments):
+            X = arguments.get('X', [])
+            y = arguments.get('y', series or [])
+            return mlr_fit(X, y)
+
+        def poly_trend_tool(arguments):
+            series_in = arguments.get('series', series or [])
+            degree = int(arguments.get('degree', 2))
+            return poly_fit(series_in, degree)
+
+        def correlation_tool(arguments):
+            return correlation(arguments.get('X', []))
 
         def search_tool(arguments):
             index = _retrieval_index()
@@ -1127,6 +1147,8 @@ def create_app(config_path: str = 'configs/helix-research.json',
             index_available = False
         orchestrator = Orchestrator(
             {'symbolic_math': symbolic_tool, 'linear_forecast': forecast_tool,
+             'ar_forecast': ar_forecast_tool, 'multiple_regression': multiple_regression_tool,
+             'poly_trend': poly_trend_tool, 'correlation': correlation_tool,
              'document_search': search_tool, 'code_execution': execute_tool},
             generate=generate,
             documents_available=index_available,
