@@ -94,6 +94,37 @@ def test_chat_without_artifacts_returns_actionable_json_503(client):
     assert stream.status_code == 503 and stream.mimetype == 'application/json'
 
 
+def test_basic_conversation_is_reliable_without_loading_the_weak_checkpoint(client):
+    response = client.post('/api/chat', json={'message': 'How are you?'})
+    assert response.status_code == 200
+    body = _json(response)
+    assert body['verified'] is True
+    assert 'HELIX' in body['reply']
+    stream = client.post('/api/chat/stream', json={'message': 'What is your name?'})
+    assert stream.status_code == 200 and stream.mimetype == 'text/event-stream'
+    assert 'helix-conversation-router' in stream.get_data(as_text=True)
+
+
+def test_knowledge_agent_ingestion_is_authenticated_indexed_and_not_training(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, 'resolve_data_root', lambda *args, **kwargs: tmp_path)
+    monkeypatch.setenv('HELIX_AGENT_INGEST_KEYS', 'ingest-test-key')
+    application = create_app(config_path=str(tmp_path / 'missing.json'),
+                             llm_checkpoint=str(tmp_path / 'missing.pt'))
+    application.testing = True
+    client = application.test_client()
+    denied = client.post('/api/knowledge/ingest', json={'text': 'A sufficiently long knowledge document about wheat milling.', 'name': 'wheat.txt'})
+    assert denied.status_code == 401
+    accepted = client.post('/api/knowledge/ingest', headers={'X-HELIX-Agent-Key': 'ingest-test-key'},
+                           json={'text': 'A sufficiently long knowledge document about wheat milling.',
+                                 'name': 'wheat.txt', 'license_note': 'user-submitted'})
+    assert accepted.status_code == 201
+    body = _json(accepted)
+    assert body['indexed'] is True and body['training_updated'] is False
+    duplicate = client.post('/api/knowledge/ingest', headers={'X-HELIX-Agent-Key': 'ingest-test-key'},
+                            json={'text': 'A sufficiently long knowledge document about wheat milling.', 'name': 'copy.txt'})
+    assert _json(duplicate)['deduplicated'] is True
+
+
 def test_oversized_json_body_is_rejected_as_json(client):
     payload = json.dumps({'message': 'x' * (7 * 1024 * 1024)})
     response = client.post('/api/chat', data=payload, content_type='application/json')

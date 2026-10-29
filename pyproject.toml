@@ -15,7 +15,8 @@ dependencies = [
     "Pillow>=10,<12",
     "Flask>=3,<4",
     "sympy>=1.12,<2",
-    "matplotlib>=3.8,<4"
+    "matplotlib>=3.8,<4",
+    "pypdf>=5,<7"
 ]
 
 [project.optional-dependencies]

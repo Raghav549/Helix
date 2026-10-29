@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 EMBED_DIM = 512
-SUPPORTED_SUFFIXES = {'.md', '.markdown', '.txt', '.html', '.htm', '.rst', '.json', '.csv'}
+SUPPORTED_SUFFIXES = {'.md', '.markdown', '.txt', '.html', '.htm', '.rst', '.json', '.csv', '.pdf'}
 DEFAULT_CHUNK_CHARS = 900
 DEFAULT_OVERLAP_CHARS = 120
 MAX_DOCUMENT_BYTES = 4 * 1024 * 1024
@@ -198,6 +198,8 @@ class RetrievalIndex:
         for path in sorted(root_path.rglob('*')):
             if not path.is_file() or path.is_symlink():
                 continue
+            if path.name == 'helix-retrieval.json':
+                continue
             if path.suffix.lower() not in SUPPORTED_SUFFIXES:
                 continue
             if any(part.startswith('.') for part in path.relative_to(root_path).parts):
@@ -211,7 +213,8 @@ class RetrievalIndex:
             if skip_prefixes and relative.startswith(skip_prefixes):
                 continue
             doc_id = hashlib.sha256(relative.encode('utf-8')).hexdigest()[:16]
-            title = path.stem.replace('_', ' ').replace('-', ' ').strip() or relative
+            source_metadata = (manifest.get('documents', {}).get(relative, {}) or {})
+            title = str(source_metadata.get('title') or path.stem.replace('_', ' ').replace('-', ' ').strip() or relative)
             pages: Optional[List[str]] = None
             if path.suffix.lower() == '.pdf':  # pragma: no cover - optional
                 pages = _pdf_pages(path)
@@ -237,7 +240,8 @@ class RetrievalIndex:
                 chunks.append(chunk)
             documents.append({'doc_id': doc_id, 'source': relative, 'title': title,
                               'bytes': len(text.encode('utf-8')), 'chunks': len(spans),
-                              'license': (manifest.get('documents', {}).get(relative, {}) or {}).get('license'),
+                              'license': source_metadata.get('license'),
+                              'source_url': source_metadata.get('source_url'),
                               'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()})
         return cls(chunks, documents, root=str(root_path),
                    version=str(manifest.get('version', 'local')))

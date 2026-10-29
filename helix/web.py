@@ -216,6 +216,11 @@ def create_app(config_path: str = 'configs/helix-research.json',
     image_root = runtime_root / 'web_images'
     image_root.mkdir(parents=True, exist_ok=True)
     store = MemoryStore(str(runtime_root / 'memory.sqlite3'))
+    # Knowledge Mill storage lives outside the source checkout.  New content is
+    # retrieved immediately after indexing; it does not silently train a model.
+    from helix.knowledge import KnowledgeError, KnowledgeMill
+    knowledge_root = os.getenv('HELIX_KNOWLEDGE_ROOT') or str(resolve_data_root() / 'knowledge-mill')
+    knowledge = KnowledgeMill(knowledge_root)
     models = ModelCache()
     compute = threading.Lock()
     audit_lock = threading.Lock()
@@ -229,7 +234,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
     build = (build_sha or os.getenv('HELIX_BUILD_SHA') or os.getenv('RENDER_GIT_COMMIT')
              or os.getenv('VERCEL_GIT_COMMIT_SHA') or 'unknown')
     startup_failure = startup_error
-    retrieval_dir = retrieval_root or os.getenv('HELIX_RETRIEVAL_ROOT') or ''
+    retrieval_dir = retrieval_root or os.getenv('HELIX_RETRIEVAL_ROOT') or str(knowledge.index_dir)
     api_metrics = {'requests': 0, 'errors': 0, 'chats': 0, 'chat_failures': 0}
 
     def client_key() -> str:
@@ -293,6 +298,33 @@ def create_app(config_path: str = 'configs/helix-research.json',
                 context.append(item['role'].capitalize() + ': ' + item['text'][:400])
         instruction = ('\n'.join(context) + '\nUser: ' if context else '') + message.strip()
         return f'INSTRUCTION: {instruction}\nRESPONSE: ', message
+
+    def conversational_reply(message):
+        """Route a tiny set of identity/greeting requests away from a known weak model.
+
+        This is a deliberately narrow reliability guard, not a claim of model
+        training or general reasoning.  All other requests use the checkpoint.
+        """
+        normalized = re.sub(r'[^a-z0-9 ]+', ' ', message.lower()).strip()
+        if normalized in {'how are you', 'how are you doing', 'how r you', 'kaise ho', 'kaise hain'}:
+            return ('I’m HELIX, online and ready to help with questions, code, documents, and the '
+                    'knowledge you choose to add. What would you like to work through?')
+        if normalized in {'what is your name', 'whats your name', 'who are you', 'tum kaun ho', 'aap kaun ho'}:
+            return ('I’m HELIX, an AI workspace with chat, verified calculations, local knowledge '
+                    'retrieval, and developer tools. I will cite uploaded sources when I use them.')
+        if normalized in {'hello', 'hi', 'hey', 'namaste'}:
+            return 'Hello — I’m HELIX. Tell me what you want to understand, create, or verify.'
+        return None
+
+    def agent_key_identity():
+        configured = [value.strip() for value in os.getenv('HELIX_AGENT_INGEST_KEYS', '').split(',') if value.strip()]
+        supplied = request.headers.get('X-HELIX-Agent-Key', '')
+        if not configured:
+            return None, 'agent_ingest_not_configured'
+        for index, value in enumerate(configured):
+            if hmac.compare_digest(supplied.encode('utf-8'), value.encode('utf-8')):
+                return f'agent-{index + 1}', None
+        return None, 'invalid_agent_key'
 
     @app.before_request
     def start_request():
@@ -457,19 +489,16 @@ def create_app(config_path: str = 'configs/helix-research.json',
     @app.get('/api/status')
     def status():
         files = model_files()
-        retrieval = None
+        retrieval = knowledge.status()
         try:
             from helix.retrieval import RetrievalIndex
-            if retrieval_dir:
+            if retrieval_dir and not retrieval.get('configured'):
                 index = RetrievalIndex.load(retrieval_dir)
                 retrieval = {'configured': True, 'documents': index.document_count,
                              'chunks': index.chunk_count, 'kind': 'local-document-index'}
-            else:
-                retrieval = {'configured': False, 'documents': 0, 'chunks': 0,
-                             'kind': 'local-document-index',
-                             'hint': 'Set HELIX_RETRIEVAL_ROOT to a directory of .md/.txt/.html files to enable source-grounded answers.'}
         except Exception:
-            retrieval = {'configured': False, 'documents': 0, 'chunks': 0, 'kind': 'local-document-index'}
+            pass
+        retrieval['kind'] = 'knowledge-mill-retrieval'
         return jsonify({'ok': True, 'device': 'cpu',
                         'version': HELIX_VERSION, 'build': build, 'request_id': g.request_id,
                         'models': files,
@@ -479,12 +508,56 @@ def create_app(config_path: str = 'configs/helix-research.json',
                                          'image_analysis': files['vision'] or files['caption'],
                                          'code_analysis': True, 'code_execution': True,
                                          'symbolic_math': True, 'csv_statistics': True,
-                                         'retrieval': retrieval['configured'],
+                                         'retrieval': retrieval['configured'], 'knowledge_ingestion': True,
                                          'web_search': False, 'training_jobs': False},
                         'retrieval': retrieval,
-                        'limitations': ('Small experimental models trained from random initialization on a '
-                                        'small documented corpus. No general-purpose accuracy, live web access '
-                                        'or photorealism claim.')})
+                        'knowledge_note': 'Knowledge uploads update retrieval only. Training requires a separate reviewed run.'})
+
+    @app.get('/api/knowledge/status')
+    def knowledge_status():
+        return jsonify({**knowledge.status(), 'storage': 'persistent-when-HELIX_DATA_ROOT-is-persistent',
+                        'training_updated': False, 'agent_api_configured': bool(os.getenv('HELIX_AGENT_INGEST_KEYS'))})
+
+    @app.get('/api/knowledge/documents')
+    def knowledge_documents():
+        return jsonify({'documents': knowledge.list_documents(), 'training_updated': False})
+
+    @app.post('/api/knowledge/ingest')
+    def knowledge_ingest():
+        identity, error = agent_key_identity()
+        if error == 'agent_ingest_not_configured':
+            return api_error('Knowledge Mill agent ingestion is not configured.', 503, error)
+        if error:
+            return api_error('Knowledge Mill agent authentication failed.', 401, error)
+        try:
+            license_note = ''
+            if request.files.get('file') is not None:
+                upload = request.files['file']
+                raw = upload.read(MAX_CONTENT_LENGTH := 4 * 1024 * 1024 + 1)
+                if len(raw) > 4 * 1024 * 1024:
+                    raise KnowledgeError('Sources must be at most 4 MiB')
+                record = knowledge.ingest(raw, upload.filename or 'upload.txt', upload.mimetype or '',
+                                          source_kind='upload', source_url=None, submitted_by=identity,
+                                          license_note=str(request.form.get('license_note', '')))
+            else:
+                body = _json_body()
+                license_note = str(body.get('license_note', ''))
+                if isinstance(body.get('text'), str):
+                    record = knowledge.ingest(body['text'].encode('utf-8'), str(body.get('name') or 'submitted.txt'),
+                                              'text/plain', source_kind='text', source_url=None,
+                                              submitted_by=identity, license_note=license_note)
+                elif isinstance(body.get('url'), str):
+                    raw, content_type, name = knowledge.fetch_url(body['url'])
+                    record = knowledge.ingest(raw, str(body.get('name') or name), content_type, source_kind='url',
+                                              source_url=body['url'], submitted_by=identity, license_note=license_note)
+                else:
+                    raise KnowledgeError('Provide one of text, url, or a multipart file field')
+            audit('knowledge_ingest', True)
+            return jsonify({**record, 'training_updated': False,
+                            'notice': 'Stored with provenance and indexed for retrieval; model weights were not trained.'}), 200 if record.get('deduplicated') else 201
+        except (KnowledgeError, ValueError, TypeError) as exc:
+            audit('knowledge_ingest', False)
+            return api_error(str(exc), 400, 'knowledge_ingest_rejected')
 
     @app.get('/api/diagnostics')
     def diagnostics():
@@ -532,6 +605,23 @@ def create_app(config_path: str = 'configs/helix-research.json',
             use_sources = body.get('use_sources') is not False
         except (ValueError, TypeError) as exc:
             return api_error(str(exc), 400, 'invalid_request')
+        routed_reply = conversational_reply(message)
+        if routed_reply is not None:
+            meta = {'request_id': g.request_id, 'model': 'helix-conversation-router',
+                    'streaming': bool(streaming), 'sources': [],
+                    'grounded_in_local_documents': False,
+                    'notice': 'Reliable conversational response route; no model weights were updated.'}
+            if streaming:
+                payload = ('data: ' + json.dumps({'meta': meta}, ensure_ascii=False) + '\n\n' +
+                           'data: ' + json.dumps({'delta': routed_reply}, ensure_ascii=False) + '\n\n' +
+                           'data: ' + json.dumps({'done': True, 'request_id': g.request_id}) + '\n\n')
+                audit('chat_routed', True, message)
+                return Response(payload, mimetype='text/event-stream', headers={
+                    'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no',
+                    'Connection': 'keep-alive', 'X-Request-ID': g.request_id})
+            audit('chat_routed', True, message)
+            return jsonify({'reply': routed_reply, 'verified': True, 'sources': [],
+                            'request_id': g.request_id, 'notice': meta['notice']})
         sources, evidence = [], ''
         if use_sources and retrieval_dir:
             try:

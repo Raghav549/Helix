@@ -290,7 +290,7 @@ test('logs never contain credentials, prompts or authorization headers', async (
   const prompt = 'my private prompt about a secret project';
   await fetch(`${proxy.base}/api/chat`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer client-token-should-not-be-forwarded' },
+    headers: { 'content-type': 'application/json', authorization: 'Bearer client-token-should-not-be-forwarded', 'x-helix-agent-key': 'agent-key-test-value' },
     body: JSON.stringify({ message: prompt }),
   });
   const serialized = JSON.stringify(proxy.logs);
@@ -299,6 +299,7 @@ test('logs never contain credentials, prompts or authorization headers', async (
   assert.ok(!serialized.includes('client-token-should-not-be-forwarded'));
   const upstreamHeaders = mock.state.requests[0].headers;
   assert.equal(upstreamHeaders.authorization.startsWith('Basic '), true);
+  assert.equal(upstreamHeaders['x-helix-agent-key'], 'agent-key-test-value');
   assert.equal(upstreamHeaders['x-forwarded-proto'], 'https');
   await close(proxy.server, mock.server);
 });
