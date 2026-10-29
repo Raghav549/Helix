@@ -393,7 +393,8 @@ def create_app(config_path: str = 'configs/helix-research.json',
         codes = {400: 'bad_request', 401: 'unauthorized', 403: 'forbidden', 404: 'route_not_found',
                  405: 'method_not_allowed', 413: 'request_too_large', 415: 'unsupported_media_type',
                  429: 'rate_limited'}
-        return api_error(exc.description or exc.name, exc.code or 500,
+        messages = {404: 'Unknown HELIX API route.', 405: 'Method not allowed for this route.'}
+        return api_error(messages.get(exc.code, exc.description or exc.name), exc.code or 500,
                          codes.get(exc.code or 500, 'http_error'))
 
     @app.errorhandler(Exception)

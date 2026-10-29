@@ -212,8 +212,10 @@ class Orchestrator:
                                  'variable': variable}, True, expression or text)
             if output and output.get('ok'):
                 steps = '\n'.join(output.get('steps', []))
+                verifier = output.get('verified_by') or 'sympy'
+                version = output.get('sympy_version') or ''
                 result.answer = (f'{output.get("result")}\n\n{steps}\n\n'
-                                 f'Verified with SymPy {output.get("sympy_version", "")} '
+                                 f'Computed by {verifier}{" " + version if version else ""} '
                                  f'(symbolic tool output, not model output).')
             elif output:
                 result.answer = f'SymPy could not evaluate that expression: {output.get("error", "unknown error")}.'

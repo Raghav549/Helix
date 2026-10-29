@@ -50,7 +50,7 @@ def test_math_plan_runs_the_tool_and_attributes_the_result():
     assert result.classification == 'math'
     assert result.complied == ['symbolic_math']
     assert '3*x**2 + 2' in result.answer
-    assert 'Verified with SymPy' in result.answer
+    assert 'Computed by sympy' in result.answer
     assert result.tool_calls[0].ok is True
     assert result.tool_calls[0].permission == 'read-only'
     assert len(result.tool_calls[0].input_sha256) == 64

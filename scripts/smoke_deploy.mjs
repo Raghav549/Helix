@@ -119,6 +119,7 @@ async function main() {
 
   // 5. Streaming chat: the exact path that produced the browser error.
   try {
+    const started = Date.now();
     const { response, kind, ms } = await request(base, '/api/chat/stream', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -132,19 +133,25 @@ async function main() {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        if (firstByteMs === null) firstByteMs = Date.now() - ms;
+        if (firstByteMs === null) firstByteMs = Date.now() - started;
         text += decoder.decode(value, { stream: true });
       }
     }
-    const sawDone = text.includes('"done":true');
-    const sawError = /"error"\s*:/.test(text);
+    const events = text.split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => {
+        try { return JSON.parse(line.slice(5).trim()); } catch { return null; }
+      })
+      .filter(Boolean);
+    const sawDone = events.some((event) => event.done === true);
+    const sawError = events.some((event) => typeof event.error === 'string');
     const ok = kind === 'sse' && !/<!doctype html|<html/i.test(text) && (sawDone || sawError);
     record(results, 'POST /api/chat/stream (SSE, not HTML)', ok, {
       status: response.status,
       content_type: kind,
       first_byte_ms: firstByteMs,
       total_ms: ms,
-      events: (text.match(/^data: /gm) || []).length,
+      events: events.length,
       done_event: sawDone,
       backend_error: sawError ? text.slice(0, 200) : undefined,
     });
