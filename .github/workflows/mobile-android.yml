@@ -47,7 +47,7 @@ jobs:
       - name: Expo config is valid
         run: npx expo config --type public > /dev/null
       - name: Dependency versions match the Expo SDK
-        run: npx expo install --check
+        run: npm run check:versions
       - name: No secrets tracked
         run: |
           if git ls-files -- '*.jks' '*.keystore' '*.p12' '*.p8' '*.env' | grep -q .; then

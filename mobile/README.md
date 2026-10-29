@@ -21,8 +21,9 @@ mobile/
 ```bash
 cd mobile
 npm ci
-npm run typecheck      # tsc --noEmit
-npm run test:logic     # compiles src/lib + tests, runs node:test
+npm run typecheck        # tsc --noEmit
+npm run test:logic       # compiles src/lib + tests, runs node:test
+npm run check:versions   # offline check against expo/bundledNativeModules.json
 npx expo start --android   # needs an emulator/device with Expo Go or a dev build
 ```
 

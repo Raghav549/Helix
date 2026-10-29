@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "build:logic": "tsc -p tsconfig.logic.json",
     "test:logic": "npm run build:logic && node --test --test-timeout=20000 .build/tests/*.test.js",
-    "config:check": "expo config --type public"
+    "config:check": "expo config --type public",
+    "check:versions": "node scripts/check-versions.mjs"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
