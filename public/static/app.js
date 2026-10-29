@@ -523,6 +523,8 @@ function appendMessage(message) {
   saveStore();
   renderHistory();
   if ($('#thread-empty')) $('#thread-empty').remove();
+  const chatView = $('#view-chat');
+  if (chatView) chatView.classList.add('has-messages');
   const node = messageNode(message);
   $('#thread').append(node);
   scrollThread();
@@ -1224,7 +1226,7 @@ async function refreshKnowledge() {
         const item = document.createElement('article');
         item.className = 'result-item';
         const title = document.createElement('strong');
-        title.textContent = doc.name || doc.filename || 'Untitled source';
+        title.textContent = doc.original_name || doc.name || doc.filename || 'Untitled source';
         const meta = document.createElement('span');
         meta.className = 'result-source';
         meta.textContent = [doc.state || (doc.indexed ? 'indexed' : 'stored'), doc.source_kind || doc.kind || 'source', doc.sha256 ? String(doc.sha256).slice(0, 12) : ''].filter(Boolean).join(' · ');
