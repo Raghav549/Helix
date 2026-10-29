@@ -691,3 +691,10 @@ input[type="range"] { width: 100%; accent-color: var(--pink); }
   .view-chat { min-height: calc(100dvh - 84px); }
   .view-chat .composer-dock { padding-top: var(--space-2); }
 }
+
+.knowledge-metrics { margin: var(--space-3) 0; }
+.knowledge-metrics .metric { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper-soft); }
+.knowledge-metrics .metric strong { display: block; font-size: var(--text-xl); color: var(--pink); }
+#knowledge-documents .result-item { display: flex; flex-direction: column; gap: 5px; }
+#knowledge-documents a { color: var(--pink); overflow-wrap: anywhere; }
+#knowledge-form textarea { width: 100%; min-height: 150px; resize: vertical; }
