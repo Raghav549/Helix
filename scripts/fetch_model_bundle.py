@@ -74,6 +74,9 @@ def main() -> int:
                 if len(data) != record.get("bytes") or sha256_bytes(data) != record.get("sha256"):
                     raise SystemExit(f"Bundle member integrity check failed: {name}")
                 extracted[name] = data
+            # The WSGI entrypoint verifies this manifest again at process startup.
+            # Keep the verified manifest beside the installed artifact files.
+            extracted[manifest_name] = archive.read(manifest_name)
     for name, data in extracted.items():
         destination = ROOT / name
         destination.parent.mkdir(parents=True, exist_ok=True)
