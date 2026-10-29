@@ -1,21 +1,22 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import Svg, { Defs, Line, LinearGradient, Stop } from 'react-native-svg';
+import Svg, { Defs, Line, LinearGradient, Path, Stop } from 'react-native-svg';
 import { useTheme } from '../hooks/useTheme';
 
 export function Mark({ size = 22 }: { size?: number }) {
   return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" accessibilityLabel="Beta by helix">
+    <Svg width={size} height={size} viewBox="0 0 32 32" accessibilityLabel="Beta by helix">
       <Defs>
         <LinearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
           <Stop offset="0" stopColor="#ff2f86" />
+          <Stop offset="0.55" stopColor="#ff6a56" />
           <Stop offset="1" stopColor="#ffa63d" />
         </LinearGradient>
       </Defs>
-      <Line x1={6} y1={6} x2={18} y2={18} stroke="url(#mark)" strokeWidth={2.6} strokeLinecap="round" />
-      <Line x1={18} y1={6} x2={6} y2={18} stroke="url(#mark)" strokeWidth={2.6} strokeLinecap="round" />
-      <Line x1={4.5} y1={9.4} x2={19.5} y2={9.4} stroke="url(#mark)" strokeWidth={2.6} strokeLinecap="round" />
-      <Line x1={4.5} y1={14.6} x2={19.5} y2={14.6} stroke="url(#mark)" strokeWidth={2.6} strokeLinecap="round" />
+      {/* Left flame swoosh */}
+      <Path d="M8 6 C4 6 2 14 6 20 C8 26 14 26 16 20 C18 14 16 6 12 6 C10 6 8 6 8 6 Z" fill="url(#mark)" />
+      {/* Right flame swoosh */}
+      <Path d="M20 6 C24 6 26 14 22 20 C20 26 14 26 12 20 C10 14 12 6 16 6 C18 6 20 6 20 6 Z" fill="url(#mark)" opacity="0.9" />
     </Svg>
   );
 }

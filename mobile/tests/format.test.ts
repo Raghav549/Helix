@@ -48,8 +48,10 @@ test('formatAnalysis reports errors and empty payloads honestly', () => {
 
 test('quick action prompts are concrete', () => {
   assert.match(quickActionPrompt('summarize'), /Summarize the following text/);
-  assert.match(quickActionPrompt('math'), /Differentiate/);
+  assert.match(quickActionPrompt('code'), /Write a Python function/);
+  assert.match(quickActionPrompt('brainstorm'), /five distinct ideas/);
   assert.equal(quickActionPrompt('image'), '');
+  assert.equal(quickActionPrompt('more'), '');
 });
 
 test('base64 and basic auth headers match the RFC test vector', () => {
