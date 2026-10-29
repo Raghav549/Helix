@@ -254,8 +254,8 @@ repository secrets, and no APK is committed to this repository.
 
 ```sh
 .venv/bin/python -m pytest -q                            # 239 passed, 6 skipped
-node --test --test-timeout=20000 tests/node/proxy.test.cjs  # 13/13
-cd mobile && npm run typecheck && npm run test:logic        # tsc clean, 29/29
+node --test --test-timeout=20000 tests/node/proxy.test.cjs  # 15/15
+cd mobile && npm run typecheck && npm run test:logic        # tsc clean, 30/30
 ```
 
 Coverage includes API schemas, Basic auth, missing env vars, bundle verification,

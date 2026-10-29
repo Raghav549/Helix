@@ -6,7 +6,7 @@
   ],
   "documents": 11,
   "chunks": 80,
-  "index_checksum": "a887013f5ecb0aa4987fbcc1a57c1ef34950fafaac2f1a1d74c900e60265eb0e",
+  "index_checksum": "0c5e473cec5efcfd3e5585d3c2b1942c3e0553b9f1b5c5a91639ec0ac9aacc22",
   "k": 4,
   "total": 12,
   "recall_at_1": 0.75,
@@ -94,7 +94,7 @@
         },
         {
           "source": "STATUS.md",
-          "score": 0.555,
+          "score": 0.5557,
           "citation": "STATUS.md#chars=0-812"
         },
         {

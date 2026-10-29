@@ -11,8 +11,8 @@ lists the exact blockers. Nothing below is inferred from a dashboard status.
 | Area | Evidence |
 | --- | --- |
 | Python test suite | `239 passed, 6 skipped` (`python -m pytest -q`, Python 3.11.2, torch 2.5.1 CPU) |
-| Proxy tests | `13/13` (`node --test --test-timeout=20000 tests/node/proxy.test.cjs`) |
-| Android logic tests | `29/29` (`cd mobile && npm run test:logic`) |
+| Proxy tests | `15/15` (`node --test --test-timeout=20000 tests/node/proxy.test.cjs`) |
+| Android logic tests | `30/30` (`cd mobile && npm run test:logic`) |
 | Android typecheck | `npx tsc --noEmit` clean (strict, `noUncheckedIndexedAccess`) |
 | Android bundle | `npx expo export --platform android` → 770 modules, 1.9 MB Hermes bytecode |
 | Android native config | `npx expo prebuild --platform android` → manifest without `CAMERA`/`RECORD_AUDIO` |
