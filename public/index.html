@@ -74,6 +74,9 @@
         <button class="nav-item" type="button" data-view="research">
           <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-research"/></svg><span>Research</span>
         </button>
+        <button class="nav-item" type="button" data-view="knowledge">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-summarize"/></svg><span>Knowledge Mill</span>
+        </button>
       </nav>
 
       <div class="history-block">
@@ -420,6 +423,52 @@ print("Sum:", result)</textarea>
               <div class="card-head"><h4 class="card-title small">Recorded runs</h4>
                 <button class="text-button" type="button" id="refresh-experiments">Refresh</button></div>
               <div id="experiment-list" class="results"><p class="field-help">Loading…</p></div>
+            </article>
+          </div>
+        </section>
+
+        <!-- ---------------- Knowledge Mill ---------------- -->
+        <section class="view" id="view-knowledge" aria-label="Knowledge Mill" hidden>
+          <div class="view-head">
+            <div><p class="greeting-kicker">Knowledge Mill</p><h2>Turn raw material into searchable knowledge.</h2>
+              <p class="view-sub">Submit text, a public URL, or a document. Approved content updates retrieval; it does not silently retrain model weights.</p></div>
+          </div>
+          <div class="grid two">
+            <article class="card">
+              <h3 class="card-title">Add a source</h3>
+              <form id="knowledge-form" class="stack">
+                <div class="field">
+                  <label for="knowledge-url">Public webpage or document URL</label>
+                  <input id="knowledge-url" type="url" placeholder="https://example.com/article">
+                </div>
+                <div class="field">
+                  <label for="knowledge-text">Or paste raw text / paragraphs</label>
+                  <textarea id="knowledge-text" rows="7" maxlength="200000" placeholder="Paste notes, paragraphs, research excerpts, or structured text…"></textarea>
+                </div>
+                <div class="field">
+                  <label for="knowledge-file">Or upload a file (maximum 4 MiB)</label>
+                  <input id="knowledge-file" type="file" accept=".txt,.md,.markdown,.rst,.html,.htm,.json,.csv,.pdf,.png,.jpg,.jpeg,.webp,text/plain,text/markdown,text/html,application/pdf,image/png,image/jpeg,image/webp">
+                  <p class="field-help">Supported inputs: TXT, Markdown, HTML, JSON, CSV, PDF, PNG, JPG and WebP. Image files are stored for analysis; OCR availability depends on the configured vision tools.</p>
+                </div>
+                <div class="field">
+                  <label for="knowledge-license">Source / rights note</label>
+                  <input id="knowledge-license" maxlength="500" placeholder="e.g. created by me, public-domain, licensed source">
+                </div>
+                <button class="primary" id="knowledge-submit" type="submit">Process and index source</button>
+                <p class="field-help" id="knowledge-result" role="status">Uploads require authenticated access. Do not submit material you are not allowed to store or use.</p>
+              </form>
+            </article>
+            <article class="card">
+              <div class="card-head">
+                <h3 class="card-title">Knowledge inventory</h3>
+                <button class="secondary" id="knowledge-refresh" type="button">Refresh</button>
+              </div>
+              <div class="grid two knowledge-metrics">
+                <div class="metric"><span class="field-help">Documents</span><strong id="knowledge-doc-count">—</strong></div>
+                <div class="metric"><span class="field-help">Indexed chunks</span><strong id="knowledge-chunk-count">—</strong></div>
+              </div>
+              <p class="field-help" id="knowledge-status" role="status">Checking storage and index…</p>
+              <div class="results" id="knowledge-documents"><p class="field-help">Loading sources…</p></div>
             </article>
           </div>
         </section>
