@@ -652,13 +652,28 @@ async function sendMessage(text) {
   }
 }
 
+function describeFailure(error) {
+  const code = String(error?.code || '');
+  const upstreamStatus = Number(error?.upstreamStatus || error?.upstream_status || 0);
+  if (code === 'render_cold_start') return 'The backend is starting up. Retry in a few seconds.';
+  if (code === 'upstream_non_json' && upstreamStatus === 404) {
+    return 'This deployment\'s backend is older than this client (the API route is missing).';
+  }
+  if (code === 'upstream_non_json' || code === 'html_instead_of_json' || code === 'unexpected_html') {
+    return 'The deployment returned a web page instead of JSON.';
+  }
+  if (code === 'model_unavailable') return 'The model is not loaded on this deployment.';
+  if (code === 'rate_limited' || code === 'compute_busy') return 'The server is busy. Retry in a moment.';
+  if (code === 'unauthorized') return 'This deployment rejected the request credentials.';
+  if (code === 'route_not_found') return 'This API route does not exist on the deployment.';
+  return 'Unable to generate a reply.';
+}
+
 function renderChatError(thread, message, error) {
   const node = document.createElement('div');
   node.className = 'message-error';
   const title = document.createElement('strong');
-  title.textContent = error.code === 'html_instead_of_json'
-    ? 'The deployment returned a web page instead of JSON.'
-    : 'Unable to generate a reply.';
+  title.textContent = describeFailure(error);
   const detail = document.createElement('span');
   detail.textContent = error.message;
   const meta = document.createElement('code');
@@ -778,9 +793,12 @@ async function refreshHealth(verbose = false) {
     if (retrieval) applyCapabilities(retrieval);
   } catch (error) {
     dot.className = 'dot is-down';
-    label.textContent = 'Backend unreachable';
+    label.textContent = error.code === 'upstream_non_json' ? 'Backend outdated'
+      : error.code === 'render_cold_start' ? 'Backend starting' : 'Backend unreachable';
     healthDot.className = 'dot is-down';
-    healthText.textContent = error.code === 'html_instead_of_json' ? 'Proxy error' : 'Offline';
+    healthText.textContent = error.code === 'upstream_non_json' ? 'Backend outdated'
+      : error.code === 'render_cold_start' ? 'Starting'
+      : error.code === 'html_instead_of_json' ? 'Proxy error' : 'Offline';
     $('#health-pill').title = `${error.message}${error.requestId ? ` (request ${error.requestId})` : ''}`;
     if (verbose) toast(error.message, 'error', 8000);
   }

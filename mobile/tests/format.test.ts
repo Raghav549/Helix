@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatBytes, formatRelativeTime, summarizeHealth, truncate } from '../src/lib/format';
+import { formatBytes, formatRelativeTime, healthNotice, summarizeHealth, truncate } from '../src/lib/format';
 import { formatAnalysis, quickActionPrompt } from '../src/lib/analysis';
 import { basicAuthHeader, encodeBase64 } from '../src/lib/base64';
 
@@ -57,4 +57,13 @@ test('base64 and basic auth headers match the RFC test vector', () => {
   assert.equal(encodeBase64('a'), 'YQ==');
   assert.equal(encodeBase64('héllo'), 'aMOpbGxv');
   assert.equal(basicAuthHeader('u', 'p'), 'Basic dTpw');
+});
+
+test('health notices describe the actual failure', () => {
+  assert.equal(healthNotice('https://x.test', 'ready', null), null);
+  assert.match(healthNotice('https://x.test', 'degraded', null)!, /model is not loaded/);
+  assert.match(healthNotice('https://x.test', 'down', { kind: 'not_found' })!, /older deployment/);
+  assert.match(healthNotice('https://x.test', 'down', { kind: 'unauthorized' })!, /credentials/);
+  assert.match(healthNotice('https://x.test', 'down', { kind: 'bad_gateway' })!, /starting or unavailable/);
+  assert.match(healthNotice('https://x.test', 'down', { kind: 'offline' })!, /Cannot reach https:\/\/x\.test/);
 });

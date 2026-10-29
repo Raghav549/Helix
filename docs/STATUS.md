@@ -29,7 +29,8 @@ lists the exact blockers. Nothing below is inferred from a dashboard status.
 | --- | --- |
 | Render backend `helix-chat.onrender.com` | Still serving Render's "Application loading" HTML to `/healthz` and to `/api/status` via Vercel. The latest recorded Render deploy says success, but the service does not serve responses. |
 | Vercel **preview** of this branch | Verified live: `helix-web-git-arena-70d7f428-helix-raghav549s-projects.vercel.app` serves the new "Beta by helix" client and `/api/status` now returns JSON `503 {"code":"render_cold_start", ... "upstream_content_type":"text/html; charset=utf-8"}` instead of HTML. The browser no longer sees a JSON parse error. |
-| Vercel production `helix-web-lemon.vercel.app` | Still on the previous build (HTML interstitial), because production deploys from `main`. Merging PR #15 ships the fix. |
+| Vercel production `helix-web-lemon.vercel.app` | **Deployed after merging PR #15** and verified: `/api/status` returns backend JSON, and missing routes (`/api/health`, `/api/version`) return proxy JSON `502 {"code":"upstream_non_json","upstream_status":404}` instead of an HTML page. The browser no longer shows a JSON parse error. |
+| Render backend revision | Production Render is still on an older build: `/api/version` and `/api/health` answer `404 text/html`, and `/api/status` returns the old sparse schema. `render.yaml` sets `autoDeploy: no`, so merging did not redeploy it. |
 | Render backend (all environments) | Returns HTTP 503 with `text/html` for `/healthz`, `/api/status` and every API route; the proxy now reports that as JSON. |
 | Production browser chat | Cannot pass until the Render service serves. The HTML-as-JSON failure mode is fixed and tested in this branch (proxy returns `503 render_cold_start` with JSON), but that code is not deployed from this branch. |
 | Android APK artifact | **Produced by CI**: run [40837220492](https://github.com/Raghav549/Helix/actions/runs/40837220492) built `assembleDebug` and uploaded the artifact `beta-by-helix-debug-unsigned-release` (55,995,560 bytes, expires 2026-11-12). It is a debug APK, not a signed release; no APK is committed to the repository. |
@@ -38,9 +39,10 @@ lists the exact blockers. Nothing below is inferred from a dashboard status.
 
 ## Blockers (precise)
 
-1. **Render service not serving.** Requires dashboard access (or a `RENDER_API_KEY`) to
-   read build/runtime logs and restart or redeploy `helix-chat`. Without it, the deployed
-   API cannot be tested end-to-end from here.
+1. **Render is serving an older build.** It responds now, but without `/api/health`,
+   `/api/version` or the current `/api/status` schema. Redeploying needs dashboard access
+   or a `RENDER_API_KEY` (`autoDeploy: no` in `render.yaml`). The web and Android clients
+   report this as "Backend outdated" instead of a parse error.
 2. **No production deploy credential for this branch.** Vercel and Render deploy from the
    default branch; this work sits on `arena/70d7f428-helix`. Merging the branch makes the
    fixed proxy and client deployable.

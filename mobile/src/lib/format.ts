@@ -23,6 +23,29 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Banner text for the chat header when the health probe fails. */
+export function healthNotice(
+  baseUrl: string,
+  tone: 'ready' | 'degraded' | 'down',
+  error: { kind?: string; message?: string } | null,
+): string | null {
+  if (tone === 'ready') return null;
+  if (tone === 'degraded') {
+    return 'The server is up but the model is not loaded, so chat replies may be unavailable. Tools still work.';
+  }
+  const kind = error?.kind ?? '';
+  if (kind === 'not_found' || kind === 'malformed') {
+    return `The backend behind ${baseUrl} is reachable but does not expose this API version. It is probably an older deployment.`;
+  }
+  if (kind === 'unauthorized') {
+    return 'The server rejected these credentials. Add the deployment username and password in Settings.';
+  }
+  if (kind === 'bad_gateway' || kind === 'model_unavailable') {
+    return 'The backend is starting or unavailable. Retry in a moment; the proxy reports the upstream status as JSON.';
+  }
+  return `Cannot reach ${baseUrl}. Check the API URL and credentials in Settings.`;
+}
+
 export function summarizeHealth(health: Record<string, unknown> | null): {
   label: string;
   tone: 'ready' | 'degraded' | 'down';
