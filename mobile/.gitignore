@@ -2,6 +2,7 @@ node_modules/
 .expo/
 .build/
 dist/
+android/
 *.jks
 *.keystore
 *.p8

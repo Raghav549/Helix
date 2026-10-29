@@ -755,7 +755,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
             audit('memory_add', True)
             return jsonify({'id': memory_id}), 201
         except (ValueError, PermissionError) as exc:
-            return jsonify({'error': str(exc)}), 400
+            return api_error(str(exc), 400, 'invalid_request')
 
     @app.route('/api/memory/<int:memory_id>', methods=['PUT', 'DELETE'])
     def memory_item(memory_id):
@@ -768,7 +768,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
             audit('memory_change', ok)
             return jsonify({'ok': ok}), 200 if ok else 404
         except (ValueError, PermissionError) as exc:
-            return jsonify({'error': str(exc)}), 400
+            return api_error(str(exc), 400, 'invalid_request')
 
     @app.post('/api/image/generate')
     def image_generate():
@@ -845,7 +845,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
             return jsonify({'error': str(exc)}), 400
         except Exception as exc:
             audit('image_analyze', False)
-            return jsonify({'error': str(exc)}), 500
+            return api_error(str(exc), 500, 'image_analysis_failed')
         finally:
             compute.release()
 
@@ -878,7 +878,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
                             'notice': 'Experimental 32×32 image-to-image; not validated on photographs.'})
         except Exception as exc:
             audit('image_edit', False, prompt)
-            return jsonify({'error': str(exc)}), 500
+            return api_error(str(exc), 500, 'image_edit_failed')
         finally:
             compute.release()
 
@@ -891,7 +891,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
             result = asdict(StaticAnalyzer(code, '<workspace>').analyze())
             audit('code_analyze', True, code)
             return jsonify(result)
-        except ValueError as exc: return jsonify({'error': str(exc)}), 400
+        except ValueError as exc: return api_error(str(exc), 400, 'invalid_request')
 
     @app.post('/api/code/execute')
     def code_execute():
@@ -917,7 +917,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
             patch = PatchGenerator().make_patch('workspace.py', original, modified)
             audit('code_patch_preview', True)
             return jsonify({'diff': patch.diff, 'note': 'Preview only; no file was changed.'})
-        except ValueError as exc: return jsonify({'error': str(exc)}), 400
+        except ValueError as exc: return api_error(str(exc), 400, 'invalid_request')
 
     @app.post('/api/code/test-skeleton')
     def code_test_skeleton():
@@ -930,7 +930,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
             audit('code_test_skeleton', True)
             return jsonify({'tests': tests, 'notice': 'Generated callable/import checks only; not executed or behaviorally verified.'})
         except (ValueError, SyntaxError) as exc:
-            return jsonify({'error': str(exc)}), 400
+            return api_error(str(exc), 400, 'invalid_request')
 
     @app.post('/api/code/explain')
     def code_explain():
@@ -938,7 +938,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
             body = _json_body(); code = body.get('code', '')
             if not isinstance(code, str) or len(code) > 4000: raise ValueError('code must be under 4000 characters')
             return start_chat({'message': 'Explain this Python code:\n' + code, 'max_new_tokens': 100}, False)
-        except ValueError as exc: return jsonify({'error': str(exc)}), 400
+        except ValueError as exc: return api_error(str(exc), 400, 'invalid_request')
 
     @app.post('/api/research/math')
     def research_math():
@@ -963,7 +963,7 @@ def create_app(config_path: str = 'configs/helix-research.json',
             audit('research_math', result.get('ok'), expression)
             return jsonify(result), 200 if result.get('ok') else 400
         except (ValueError, TypeError) as exc:
-            return jsonify({'error': str(exc)}), 400
+            return api_error(str(exc), 400, 'invalid_request')
 
     @app.post('/api/research/csv')
     def research_csv():
