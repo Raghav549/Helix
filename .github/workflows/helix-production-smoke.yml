@@ -1,0 +1,53 @@
+name: HELIX production smoke
+
+on:
+  workflow_run:
+    workflows: ["HELIX tests"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Wait for production backend to match the tested commit
+        env:
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          HELIX_WEB_URL: https://helix-web-lemon.vercel.app
+        run: |
+          node --input-type=module <<'NODE'
+          const base = process.env.HELIX_WEB_URL;
+          const expected = process.env.EXPECTED_SHA;
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          let last = 'no response';
+          for (let attempt = 1; attempt <= 36; attempt++) {
+            try {
+              const response = await fetch(base + '/api/health', { signal: AbortSignal.timeout(15000) });
+              const body = await response.json();
+              last = `status=${response.status} build=${body.build || 'unknown'} model_ready=${body.model_ready}`;
+              if (response.ok && body.build === expected) {
+                console.log(`Production backend matches tested commit ${expected}: ${last}`);
+                process.exit(0);
+              }
+            } catch (error) {
+              last = error.message;
+            }
+            console.log(`Waiting for production rollout (${attempt}/36): ${last}`);
+            await sleep(10000);
+          }
+          console.error(`Production did not reach expected build ${expected}; last observation: ${last}`);
+          process.exit(1);
+          NODE
+      - name: Run production JSON, chat and streaming smoke tests
+        run: node scripts/smoke_deploy.mjs --base https://helix-web-lemon.vercel.app --json
