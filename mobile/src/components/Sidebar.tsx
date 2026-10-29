@@ -16,7 +16,6 @@ export interface SidebarProps {
   onDelete: (id: string) => void;
   themeMode: ThemeMode;
   onCycleTheme: () => void;
-  status: { label: string; tone: 'ready' | 'degraded' | 'down' };
   onOpenSettings: () => void;
 }
 
@@ -30,7 +29,6 @@ export function Sidebar({
   onDelete,
   themeMode,
   onCycleTheme,
-  status,
   onOpenSettings,
 }: SidebarProps) {
   const theme = useTheme();
@@ -44,7 +42,6 @@ export function Sidebar({
     ]).start();
   }, [visible, fade, slide]);
 
-  const toneColor = status.tone === 'ready' ? theme.palette.success : status.tone === 'degraded' ? theme.palette.warning : theme.palette.danger;
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
@@ -114,13 +111,6 @@ export function Sidebar({
             <Text style={[styles.footerText, { color: theme.palette.ink }]}>Theme</Text>
             <Text style={[styles.footerHint, { color: theme.palette.mutedSoft }]}>{themeMode}</Text>
           </Pressable>
-          <View style={styles.footerRow} accessibilityLiveRegion="polite">
-            <Text style={[styles.footerText, { color: theme.palette.ink }]}>Server</Text>
-            <View style={styles.statusRow}>
-              <View style={[styles.statusDot, { backgroundColor: toneColor }]} />
-              <Text style={[styles.footerHint, { color: theme.palette.mutedSoft }]}>{status.label}</Text>
-            </View>
-          </View>
         </View>
       </Animated.View>
     </Modal>
